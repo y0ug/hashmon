@@ -4,6 +4,7 @@ go 1.23.3
 
 require (
 	github.com/containrrr/shoutrrr v0.8.0
+	github.com/gorilla/mux v1.8.1
 	github.com/joho/godotenv v1.5.1
 	github.com/sirupsen/logrus v1.9.3
 	go.etcd.io/bbolt v1.3.11

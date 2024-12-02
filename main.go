@@ -3,18 +3,17 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/y0ug/hashmon/apis"
 	"github.com/y0ug/hashmon/config"
-	"github.com/y0ug/hashmon/models"
 	"github.com/y0ug/hashmon/notifications"
+	"go.etcd.io/bbolt"
 
 	"github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
@@ -48,24 +47,6 @@ func main() {
 	if cfg.InputFilePath == "" {
 		logrus.Fatal("Input file path is required but not provided.")
 	}
-
-	// Read file
-	ext := strings.ToLower(filepath.Ext(cfg.InputFilePath))
-	var hashRecords []models.HashRecord
-	switch ext {
-	case ".csv":
-		hashRecords, err = ReadCSV(cfg.InputFilePath)
-		if err != nil {
-			logrus.Fatalf("Error reading CSV: %v", err)
-		}
-	default:
-		hashRecords, err = ReadTxtFile(cfg.InputFilePath)
-		if err != nil {
-			logrus.Fatalf("Error reading file: %v", err)
-		}
-	}
-
-	logrus.WithField("record_count", len(hashRecords)).Info("file loaded successfully")
 
 	// Initialize API clients
 	var apiClients []apis.APIClient
@@ -121,13 +102,46 @@ func main() {
 	}
 
 	monitor := NewMonitor(monitorConfig,
-		hashRecords, 5, "alerted_hashes.db")
+		5, "alerted_hashes.db")
+
+	// Check if Hashes bucket is empty; if so, import from file
+	hashCount := 0
+	monitor.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("Hashes"))
+		if bucket == nil {
+			return fmt.Errorf("Hashes bucket does not exist")
+		}
+		c := bucket.Cursor()
+		for k, _ := c.First(); k != nil; k, _ = c.Next() {
+			hashCount++
+		}
+		return nil
+	})
+
+	if hashCount == 0 {
+		logrus.Info("Hashes bucket is empty. Importing hashes from file.")
+		err := monitor.ImportHashesFromFile(cfg.InputFilePath)
+		if err != nil {
+			logrus.Fatalf("Failed to import hashes: %v", err)
+		}
+	} else {
+		logrus.WithField("hash_count", hashCount).Info("Loaded existing hashes from BoltDB")
+	}
+
+	// Load hashes into memory (if needed)
+	hashRecords, err := monitor.LoadHashes()
+	if err != nil {
+		logrus.Fatalf("Failed to load hashes from BoltDB: %v", err)
+	}
+	logrus.WithField("record_count", len(hashRecords)).Info("Hashes loaded successfully")
 
 	// Initialize Web Server
 	webServer := NewWebServer(monitor)
+	router := webServer.InitRouter()
+
 	server := &http.Server{
 		Addr:    ":8808", // You can make this configurable
-		Handler: webServer,
+		Handler: router,
 	}
 
 	// Create a cancellable context
