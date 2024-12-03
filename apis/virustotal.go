@@ -57,7 +57,7 @@ func (vt *VirusTotalClient) CheckHash(ctx context.Context, hash string) (bool, e
 	}
 	defer resp.Body.Close()
 
-	logrus.Info("VirusTotal API response status: ", resp.StatusCode)
+	logrus.Debug("VirusTotal API response status: ", resp.StatusCode)
 	switch resp.StatusCode {
 	case 200:
 		return true, nil

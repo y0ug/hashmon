@@ -24,6 +24,7 @@ type Config struct {
 	RateLimits       []RateLimitConfig
 	DatabaseType     string
 	DatabasePath     string
+	WebserverConfig  *WebserverConfig
 }
 
 type RateLimitConfig struct {
@@ -67,6 +68,8 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("failed to parse RATE_LIMITS: %v", err)
 	}
 
+	webserverConfig, _ := NewWebserverConfig()
+
 	return &Config{
 		InputFilePath:    os.Getenv("INPUT_FILE_PATH"),
 		PollInterval:     time.Duration(pollInterval) * time.Minute,
@@ -78,6 +81,7 @@ func LoadConfig() (*Config, error) {
 		RateLimits:       rateLimits,
 		DatabaseType:     os.Getenv("DATABASE_TYPE"),
 		DatabasePath:     os.Getenv("DATABASE_PATH"),
+		WebserverConfig:  webserverConfig,
 	}, nil
 }
 

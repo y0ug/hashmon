@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/y0ug/hashmon/models"
@@ -166,4 +167,31 @@ func (r *RedisDB) IsAlerted(sha256, provider string) (bool, error) {
 // Close closes the Redis client connection.
 func (r *RedisDB) Close() error {
 	return r.client.Close()
+}
+
+// AddBlacklistedToken adds a token string to the blacklist with its expiration time.
+func (r *RedisDB) AddBlacklistedToken(tokenString string, exp int64) error {
+	// Calculate TTL
+	expirationTime := time.Unix(exp, 0)
+	ttl := time.Until(expirationTime)
+	if ttl <= 0 {
+		// Token already expired; no need to blacklist
+		return nil
+	}
+
+	// Define a unique key for the blacklisted token
+	key := fmt.Sprintf("blacklist:%s", tokenString)
+
+	// Store the key with TTL
+	return r.client.Set(r.ctx, key, "1", ttl).Err()
+}
+
+// IsTokenBlacklisted checks if a token is in the blacklist.
+func (r *RedisDB) IsTokenBlacklisted(tokenString string) (bool, error) {
+	key := fmt.Sprintf("blacklist:%s", tokenString)
+	exists, err := r.client.Exists(r.ctx, key).Result()
+	if err != nil {
+		return false, err
+	}
+	return exists == 1, nil
 }

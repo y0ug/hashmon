@@ -154,8 +154,7 @@ func main() {
 	logrus.WithField("record_count", len(hashRecords)).Info("Hashes loaded successfully")
 
 	// Initialize Web Server
-	webServer := NewWebServer(monitor)
-	serverAddr := ":8808" // You can make this configurable
+	webServer := NewWebServer(monitor, cfg.WebserverConfig)
 
 	// Create a cancellable context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -165,7 +164,7 @@ func main() {
 	serverErrors := make(chan error, 1)
 
 	// Start the web server
-	server, err := StartWebServer(ctx, webServer, serverAddr) // Adjust as needed
+	server, err := StartWebServer(ctx, webServer) // Adjust as needed
 	if err != nil {
 		logrus.Fatalf("Failed to start web server: %v", err)
 	}

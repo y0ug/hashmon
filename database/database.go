@@ -33,6 +33,13 @@ type Database interface {
 
 	// IsAlerted checks if a hash has been alerted for a specific provider.
 	IsAlerted(sha256, provider string) (bool, error)
+
+	// AddBlacklistedToken adds a token string to the blacklist with its expiration time.
+	AddBlacklistedToken(tokenString string, exp int64) error
+
+	// IsTokenBlacklisted checks if a token is in the blacklist.
+	// If the token is expired, it removes it from the blacklist.
+	IsTokenBlacklisted(tokenString string) (bool, error)
 }
 
 // Custom errors

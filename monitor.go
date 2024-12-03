@@ -155,17 +155,17 @@ func (m *Monitor) checkHash(ctx context.Context, record models.HashRecord) {
 		logrus.WithFields(logrus.Fields{
 			"sha256":       record.SHA256,
 			"last_checked": record.LastCheckAt,
-		}).Info("Skipping hash check; checked recently")
+		}).Debug("Skipping hash check; checked recently")
 		return
 	}
 
 	for _, apiClient := range m.Config.APIClients {
-		logrus.WithField("sha256", record.SHA256).Info("checkHash")
+		logrus.WithField("sha256", record.SHA256).Debug("checkHash")
 
 		provider := apiClient.ProviderName()
 
 		m.mutex.RLock()
-		if m.alerted[record.SHA256] != nil && m.alerted[record.SHA256][provider] {
+		if m.alerted[record.SHA256] != nil && m.alerted[record.SHA256][provider] && !record.LastCheckAt.IsZero() {
 			m.mutex.RUnlock()
 			continue // Already alerted for this provider
 		}

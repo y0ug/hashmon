@@ -8,25 +8,27 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
+	"github.com/y0ug/hashmon/config"
 	"github.com/y0ug/hashmon/models"
 )
 
 // WebServer holds the data needed for handling HTTP requests.
 type WebServer struct {
 	Monitor *Monitor
+	config  *config.WebserverConfig
 }
 
-func StartWebServer(ctx context.Context, ws *WebServer, addr string) (*http.Server, error) {
+func StartWebServer(ctx context.Context, ws *WebServer) (*http.Server, error) {
 	router := ws.InitRouter()
 
 	// Configure CORS options
 	corsOptions := cors.Options{
-		AllowedOrigins:   []string{"http://localhost:3000"}, // Adjust as needed
+		AllowedOrigins:   ws.config.CorsAllowedOrigins, // Adjust as needed
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type", "Authorization"},
 		ExposedHeaders:   []string{"Content-Length"},
 		AllowCredentials: true,
-		Debug:            false,
+		Debug:            true,
 	}
 
 	// Create CORS handler
@@ -34,35 +36,51 @@ func StartWebServer(ctx context.Context, ws *WebServer, addr string) (*http.Serv
 
 	// Create the server
 	server := &http.Server{
-		Addr:    addr,
+		Addr:    ws.config.ListenTo,
 		Handler: handler,
 	}
 
 	// Start the server in a separate goroutine
 	go func() {
+		// if err := server.ListenAndServeTLS("cert.pem", "key.pem"); err != nil && err != http.ErrServerClosed {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			fmt.Printf("ListenAndServe(): %v", err)
 		}
 	}()
 
-	fmt.Printf("Server started on %s\n", addr)
+	fmt.Printf("Server started on %s\n", ws.config.ListenTo)
 	return server, nil
 }
 
 // NewWebServer initializes a new WebServer.
-func NewWebServer(monitor *Monitor) *WebServer {
+func NewWebServer(monitor *Monitor, config *config.WebserverConfig) *WebServer {
 	return &WebServer{
 		Monitor: monitor,
+		config:  config,
 	}
 }
 
 func (ws *WebServer) InitRouter() *mux.Router {
 	r := mux.NewRouter()
+	api := r.PathPrefix("/api").Subrouter()
+	auth := r.PathPrefix("/auth").Subrouter()
+
 	// Routes
-	r.HandleFunc("/hashes", ws.handleGetHashes).Methods(http.MethodGet)
-	r.HandleFunc("/hashes/{sha256}", ws.handleGetHashDetail).Methods(http.MethodGet)
-	r.HandleFunc("/hashes", ws.handleAddHash).Methods(http.MethodPut)
-	r.HandleFunc("/hashes/{sha256}", ws.handleDeleteHash).Methods(http.MethodDelete)
+	if ws.config.AuthType == "oauth2" {
+		auth.HandleFunc("/login", ws.handleLogin).Methods("GET")
+		auth.HandleFunc("/callback", ws.handleCallback).Methods("GET")
+		auth.Handle("/status", authMiddleware(ws)(http.HandlerFunc(ws.handleStatus))).Methods("GET")
+		auth.Handle("/logout", authMiddleware(ws)(http.HandlerFunc(ws.handleLogout))).Methods("POST")
+		api.Use(authMiddleware(ws))
+	}
+
+	api.HandleFunc("/hashes", ws.handleGetHashes).Methods(http.MethodGet)
+	api.HandleFunc("/hashes/{sha256}", ws.handleGetHashDetail).Methods(http.MethodGet)
+	api.HandleFunc("/hashes", ws.handleAddHash).Methods(http.MethodPut)
+	api.HandleFunc("/hashes/{sha256}", ws.handleDeleteHash).Methods(http.MethodDelete)
+
+	r.PathPrefix("/").Handler(
+		http.StripPrefix("/", http.FileServer(http.Dir("./build/"))))
 	return r
 }
 

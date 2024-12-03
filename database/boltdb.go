@@ -50,6 +50,10 @@ func (b *BoltDB) Initialize() error {
 		if err != nil {
 			return fmt.Errorf("create AlertedHashes bucket: %v", err)
 		}
+		_, err = tx.CreateBucketIfNotExists([]byte("BlacklistedTokens"))
+		if err != nil {
+			return fmt.Errorf("create BlacklistedTokens bucket: %v", err)
+		}
 		return nil
 	})
 }
@@ -269,4 +273,73 @@ func (b *BoltDB) IsAlerted(sha256, provider string) (bool, error) {
 // Close closes the BoltDB connection.
 func (b *BoltDB) Close() error {
 	return b.db.Close()
+}
+
+// AddBlacklistedToken adds a token string to the blacklist with its expiration time.
+func (b *BoltDB) AddBlacklistedToken(tokenString string, exp int64) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	// Serialize the expiration time
+	data, err := json.Marshal(exp)
+	if err != nil {
+		return fmt.Errorf("failed to marshal expiration time: %w", err)
+	}
+
+	err = b.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("BlacklistedTokens"))
+		if bucket == nil {
+			return fmt.Errorf("BlacklistedTokens bucket does not exist")
+		}
+		return bucket.Put([]byte(tokenString), data)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to add token to blacklist: %w", err)
+	}
+
+	return nil
+}
+
+// IsTokenBlacklisted checks if a token is in the blacklist.
+// If the token is expired, it removes it from the blacklist.
+func (b *BoltDB) IsTokenBlacklisted(tokenString string) (bool, error) {
+	var exp int64
+
+	err := b.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("BlacklistedTokens"))
+		if bucket == nil {
+			return fmt.Errorf("BlacklistedTokens bucket does not exist")
+		}
+		val := bucket.Get([]byte(tokenString))
+		if val == nil {
+			return nil // Not blacklisted
+		}
+		return json.Unmarshal(val, &exp)
+	})
+	if err != nil {
+		return false, err
+	}
+
+	if exp == 0 {
+		// Invalid expiration data; treat as not blacklisted
+		return false, nil
+	}
+
+	// Check if the token has expired
+	if time.Now().Unix() > exp {
+		// Token has expired; remove it from the blacklist
+		err = b.db.Update(func(tx *bbolt.Tx) error {
+			bucket := tx.Bucket([]byte("BlacklistedTokens"))
+			if bucket == nil {
+				return fmt.Errorf("BlacklistedTokens bucket does not exist")
+			}
+			return bucket.Delete([]byte(tokenString))
+		})
+		if err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+
+	return true, nil
 }
