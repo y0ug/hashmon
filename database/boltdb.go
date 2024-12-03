@@ -1,0 +1,272 @@
+package database
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/sirupsen/logrus"
+	"github.com/y0ug/hashmon/models"
+	"go.etcd.io/bbolt"
+)
+
+// BoltDB implements the Database interface using bbolt.
+type BoltDB struct {
+	db   *bbolt.DB
+	path string
+	mu   sync.RWMutex // To ensure thread-safe operations if needed
+}
+
+// NewBoltDB initializes a new BoltDB instance.
+func NewBoltDB(path string) (*BoltDB, error) {
+	db, err := bbolt.Open(path, 0600, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	boltDB := &BoltDB{
+		db:   db,
+		path: path,
+	}
+
+	err = boltDB.Initialize()
+	if err != nil {
+		return nil, err
+	}
+
+	return boltDB, nil
+}
+
+// Initialize sets up the necessary buckets.
+func (b *BoltDB) Initialize() error {
+	return b.db.Update(func(tx *bbolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists([]byte("Hashes"))
+		if err != nil {
+			return fmt.Errorf("create Hashes bucket: %v", err)
+		}
+		_, err = tx.CreateBucketIfNotExists([]byte("AlertedHashes"))
+		if err != nil {
+			return fmt.Errorf("create AlertedHashes bucket: %v", err)
+		}
+		return nil
+	})
+}
+
+// AddHash adds a new hash record.
+func (b *BoltDB) AddHash(record models.HashRecord) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	// Check if hash already exists
+	exists := false
+	err := b.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("Hashes"))
+		if bucket == nil {
+			return fmt.Errorf("Hashes bucket does not exist")
+		}
+		val := bucket.Get([]byte(record.SHA256))
+		if val != nil {
+			exists = true
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if exists {
+		logrus.WithField("sha256", record.SHA256).Info("Hash already exists; skipping addition")
+		return nil
+	}
+
+	// Initialize LastCheckAt
+	record.LastCheckAt = time.Time{} // Zero value
+
+	// Serialize the HashRecord to JSON
+	data, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("failed to marshal HashRecord: %w", err)
+	}
+
+	// Store in BoltDB
+	err = b.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("Hashes"))
+		if bucket == nil {
+			return fmt.Errorf("Hashes bucket does not exist")
+		}
+		return bucket.Put([]byte(record.SHA256), data)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to add hash to BoltDB: %w", err)
+	}
+
+	return nil
+}
+
+// LoadHashes retrieves all hash records.
+func (b *BoltDB) LoadHashes() ([]models.HashRecord, error) {
+	var records []models.HashRecord
+
+	err := b.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("Hashes"))
+		if bucket == nil {
+			return fmt.Errorf("Hashes bucket does not exist")
+		}
+		return bucket.ForEach(func(k, v []byte) error {
+			var record models.HashRecord
+			err := json.Unmarshal(v, &record)
+			if err != nil {
+				logrus.WithError(err).Warnf("Failed to unmarshal hash record for SHA256: %s", string(k))
+				return nil // Skip invalid records
+			}
+			records = append(records, record)
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return records, nil
+}
+
+// UpdateHash updates an existing hash record.
+func (b *BoltDB) UpdateHash(record models.HashRecord) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	data, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("failed to marshal HashRecord: %w", err)
+	}
+
+	err = b.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("Hashes"))
+		if bucket == nil {
+			return fmt.Errorf("Hashes bucket does not exist")
+		}
+		return bucket.Put([]byte(record.SHA256), data)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update hash in BoltDB: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteHash removes a hash record and its associated alert data.
+func (b *BoltDB) DeleteHash(sha256 string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	// Delete from Hashes bucket
+	err := b.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("Hashes"))
+		if bucket == nil {
+			return fmt.Errorf("Hashes bucket does not exist")
+		}
+		return bucket.Delete([]byte(sha256))
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete hash from BoltDB: %w", err)
+	}
+
+	// Remove from alerted hashes
+	// This part might need to interact with the Monitor's in-memory state,
+	// but assuming that the Database layer is purely for storage,
+	// we'll handle only the persisted state here.
+
+	// Delete from AlertedHashes bucket
+	err = b.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("AlertedHashes"))
+		if bucket == nil {
+			return fmt.Errorf("AlertedHashes bucket does not exist")
+		}
+		c := bucket.Cursor()
+		prefix := sha256 + "|"
+		for k, _ := c.Seek([]byte(prefix)); k != nil && strings.HasPrefix(string(k), prefix); k, _ = c.Next() {
+			err := bucket.Delete(k)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete alerted hashes from BoltDB: %w", err)
+	}
+
+	// Similarly, handle LastCheckTimes if it's stored separately.
+
+	logrus.WithField("sha256", sha256).Info("Hash deleted successfully")
+	return nil
+}
+
+// GetHash retrieves a specific hash record.
+func (b *BoltDB) GetHash(sha256 string) (models.HashRecord, error) {
+	var record models.HashRecord
+
+	err := b.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("Hashes"))
+		if bucket == nil {
+			return fmt.Errorf("Hashes bucket does not exist")
+		}
+		val := bucket.Get([]byte(sha256))
+		if val == nil {
+			return ErrHashNotFound
+		}
+		return json.Unmarshal(val, &record)
+	})
+	if err != nil {
+		return record, err
+	}
+
+	return record, nil
+}
+
+// MarkAsAlerted marks a hash as alerted for a specific provider.
+func (b *BoltDB) MarkAsAlerted(sha256, provider string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	err := b.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("AlertedHashes"))
+		if bucket == nil {
+			return fmt.Errorf("AlertedHashes bucket does not exist")
+		}
+		key := fmt.Sprintf("%s|%s", sha256, provider)
+		return bucket.Put([]byte(key), []byte("1"))
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// IsAlerted checks if a hash has been alerted for a specific provider.
+func (b *BoltDB) IsAlerted(sha256, provider string) (bool, error) {
+	var alerted bool
+
+	err := b.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("AlertedHashes"))
+		if bucket == nil {
+			return fmt.Errorf("AlertedHashes bucket does not exist")
+		}
+		key := fmt.Sprintf("%s|%s", sha256, provider)
+		val := bucket.Get([]byte(key))
+		alerted = val != nil
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+
+	return alerted, nil
+}
+
+// Close closes the BoltDB connection.
+func (b *BoltDB) Close() error {
+	return b.db.Close()
+}

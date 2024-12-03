@@ -3,19 +3,16 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	"github.com/y0ug/hashmon/apis"
 	"github.com/y0ug/hashmon/config"
+	"github.com/y0ug/hashmon/database" // New import for database abstraction
 	"github.com/y0ug/hashmon/notifications"
-	"go.etcd.io/bbolt"
-
-	"github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
 )
 
@@ -46,6 +43,29 @@ func main() {
 	// Validate the input file path
 	if cfg.InputFilePath == "" {
 		logrus.Fatal("Input file path is required but not provided.")
+	}
+
+	// Initialize Database
+	var db database.Database
+	switch cfg.DatabaseType {
+	case "bolt":
+		// Assume cfg.DatabasePath is provided in config
+		db, err = database.NewBoltDB(cfg.DatabasePath)
+		if err != nil {
+			logrus.Fatalf("Failed to initialize BoltDB: %v", err)
+		}
+		defer db.Close()
+		logrus.Info("BoltDB initialized successfully")
+	case "redis":
+		// // Initialize RedisDB (assuming Redis configuration is in config)
+		// db, err = database.NewRedisDB(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)
+		// if err != nil {
+		// 	logrus.Fatalf("Failed to initialize RedisDB: %v", err)
+		// }
+		// defer db.Close()
+		// logrus.Info("RedisDB initialized successfully")
+	default:
+		logrus.Fatalf("Unsupported database type: %s", cfg.DatabaseType)
 	}
 
 	// Initialize API clients
@@ -99,24 +119,22 @@ func main() {
 		Notifier:      notifier,
 		APIClients:    apiClients,
 		CheckInterval: cfg.CheckInterval,
+		Database:      db,
 	}
 
-	monitor := NewMonitor(monitorConfig,
-		5, "alerted_hashes.db")
+	monitor := NewMonitor(monitorConfig, 5) // maxConcurrency is 5
 
-	// Check if Hashes bucket is empty; if so, import from file
-	hashCount := 0
-	monitor.db.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte("Hashes"))
-		if bucket == nil {
-			return fmt.Errorf("Hashes bucket does not exist")
+	// Check if hashes exist in the database; if not, import from file
+	hashCount, err := func() (int, error) {
+		hashes, err := db.LoadHashes()
+		if err != nil {
+			return 0, err
 		}
-		c := bucket.Cursor()
-		for k, _ := c.First(); k != nil; k, _ = c.Next() {
-			hashCount++
-		}
-		return nil
-	})
+		return len(hashes), nil
+	}()
+	if err != nil {
+		logrus.Fatalf("Failed to load hashes from database: %v", err)
+	}
 
 	if hashCount == 0 {
 		logrus.Info("Hashes bucket is empty. Importing hashes from file.")
@@ -125,24 +143,19 @@ func main() {
 			logrus.Fatalf("Failed to import hashes: %v", err)
 		}
 	} else {
-		logrus.WithField("hash_count", hashCount).Info("Loaded existing hashes from BoltDB")
+		logrus.WithField("hash_count", hashCount).Info("Loaded existing hashes from database")
 	}
 
 	// Load hashes into memory (if needed)
 	hashRecords, err := monitor.LoadHashes()
 	if err != nil {
-		logrus.Fatalf("Failed to load hashes from BoltDB: %v", err)
+		logrus.Fatalf("Failed to load hashes from database: %v", err)
 	}
 	logrus.WithField("record_count", len(hashRecords)).Info("Hashes loaded successfully")
 
 	// Initialize Web Server
 	webServer := NewWebServer(monitor)
-	router := webServer.InitRouter()
-
-	server := &http.Server{
-		Addr:    ":8808", // You can make this configurable
-		Handler: router,
-	}
+	serverAddr := ":8808" // You can make this configurable
 
 	// Create a cancellable context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -151,11 +164,11 @@ func main() {
 	// Channel to listen for errors from the server
 	serverErrors := make(chan error, 1)
 
-	// Start the web server in a separate goroutine
-	go func() {
-		logrus.Infof("Starting web server on %s", server.Addr)
-		serverErrors <- server.ListenAndServe()
-	}()
+	// Start the web server
+	server, err := StartWebServer(ctx, webServer, serverAddr) // Adjust as needed
+	if err != nil {
+		logrus.Fatalf("Failed to start web server: %v", err)
+	}
 
 	// Start monitoring in a separate goroutine
 	go func() {

@@ -1,17 +1,52 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"github.com/rs/cors"
 	"github.com/y0ug/hashmon/models" // Replace with your actual module path
 )
 
 // WebServer holds the data needed for handling HTTP requests.
 type WebServer struct {
 	Monitor *Monitor
+}
+
+func StartWebServer(ctx context.Context, ws *WebServer, addr string) (*http.Server, error) {
+	router := ws.InitRouter()
+
+	// Configure CORS options
+	corsOptions := cors.Options{
+		AllowedOrigins:   []string{"http://localhost:3000"}, // Adjust as needed
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Content-Type", "Authorization"},
+		ExposedHeaders:   []string{"Content-Length"},
+		AllowCredentials: true,
+		Debug:            false,
+	}
+
+	// Create CORS handler
+	handler := cors.New(corsOptions).Handler(router)
+
+	// Create the server
+	server := &http.Server{
+		Addr:    addr,
+		Handler: handler,
+	}
+
+	// Start the server in a separate goroutine
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			fmt.Printf("ListenAndServe(): %v", err)
+		}
+	}()
+
+	fmt.Printf("Server started on %s\n", addr)
+	return server, nil
 }
 
 // NewWebServer initializes a new WebServer.
@@ -47,8 +82,8 @@ func (ws *WebServer) handleGetHashes(w http.ResponseWriter, r *http.Request) {
 func (ws *WebServer) handleGetHashDetail(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	sha256 := vars["sha256"]
-	hashStatus, found := ws.Monitor.GetHashStatus(sha256)
-	if !found {
+	hashStatus, err := ws.Monitor.GetHashStatus(sha256)
+	if err != nil {
 		http.Error(w, "Hash not found", http.StatusNotFound)
 		return
 	}
@@ -102,7 +137,7 @@ func (ws *WebServer) handleDeleteHash(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Delete the hash from the monitor
-	err := ws.Monitor.DeleteHash(sha256)
+	err := ws.Monitor.Config.Database.DeleteHash(sha256)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to delete hash: %v", err), http.StatusInternalServerError)
 		return

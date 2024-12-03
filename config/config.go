@@ -22,6 +22,8 @@ type Config struct {
 	CuckooAPIKey     string
 	ShoutrrrURLs     []string
 	RateLimits       []RateLimitConfig
+	DatabaseType     string
+	DatabasePath     string
 }
 
 type RateLimitConfig struct {
@@ -74,6 +76,8 @@ func LoadConfig() (*Config, error) {
 		CuckooAPIKey:     os.Getenv("CUCKOO_API_KEY"),
 		ShoutrrrURLs:     shoutrrrURLs,
 		RateLimits:       rateLimits,
+		DatabaseType:     os.Getenv("DATABASE_TYPE"),
+		DatabasePath:     os.Getenv("DATABASE_PATH"),
 	}, nil
 }
 
