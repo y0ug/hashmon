@@ -6,10 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/y0ug/hashmon/apis"          // Replace with your actual module path
-	"github.com/y0ug/hashmon/database"      // New import for database abstraction
-	"github.com/y0ug/hashmon/models"        // Replace with your actual module path
-	"github.com/y0ug/hashmon/notifications" // Replace with your actual module path
+	"github.com/y0ug/hashmon/apis"
+	"github.com/y0ug/hashmon/database"
+	"github.com/y0ug/hashmon/models"
+	"github.com/y0ug/hashmon/notifications"
 
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/semaphore"

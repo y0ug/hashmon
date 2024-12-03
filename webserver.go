@@ -8,7 +8,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
-	"github.com/y0ug/hashmon/models" // Replace with your actual module path
+	"github.com/y0ug/hashmon/models"
 )
 
 // WebServer holds the data needed for handling HTTP requests.
