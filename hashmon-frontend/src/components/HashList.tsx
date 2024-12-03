@@ -15,17 +15,21 @@ import {
 } from '@mui/material';
 import { Delete, Visibility } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
-import Notification from './Notification';
 import ConfirmationDialog from './ConfirmationDialog'; // Import the ConfirmationDialog
 
-const HashList: React.FC = () => {
-  const [hashes, setHashes] = useState<HashStatus[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [notification, setNotification] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
-    open: false,
-    message: '',
-    severity: 'success',
-  });
+interface HashListProps {
+  hashes: HashStatus[];
+  setNotification: React.Dispatch<
+    React.SetStateAction<{
+      open: boolean;
+      message: string;
+      severity: 'success' | 'error';
+    }>
+  >;
+}
+
+const HashList: React.FC<HashListProps> = ({ hashes, setNotification }) => {
+  const [loading, setLoading] = useState<boolean>(false);
 
   // State for Confirmation Dialog
   const [dialogOpen, setDialogOpen] = useState<boolean>(false);
@@ -33,21 +37,6 @@ const HashList: React.FC = () => {
 
   const navigate = useNavigate();
 
-  const fetchHashes = async () => {
-    try {
-      const data = await getAllHashes();
-      setHashes(data.hashes);
-    } catch (error) {
-      console.error(error);
-      setNotification({ open: true, message: 'Failed to fetch hashes.', severity: 'error' });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchHashes();
-  }, []);
 
   // Open the confirmation dialog
   const handleDeleteClick = (hash: HashStatus) => {
@@ -58,14 +47,16 @@ const HashList: React.FC = () => {
   // Confirm deletion
   const handleConfirmDelete = async () => {
     if (!hashToDelete) return;
+    setLoading(true);
     try {
       await deleteHash(hashToDelete.sha256);
-      setHashes(hashes.filter((hash) => hash.sha256 !== hashToDelete.sha256));
+      // setHashes(hashes.filter((hash) => hash.sha256 !== hashToDelete.sha256));
       setNotification({
         open: true,
         message: 'Hash deleted successfully.',
         severity: 'success',
       });
+      // #TODO remove from the hash list by passing a function from HomePage
     } catch (error) {
       console.error(error);
       setNotification({
@@ -76,6 +67,7 @@ const HashList: React.FC = () => {
     } finally {
       setDialogOpen(false);
       setHashToDelete(null);
+      setLoading(false);
     }
   };
 
@@ -114,23 +106,27 @@ const HashList: React.FC = () => {
               </TableRow>
             </TableHead>
             <TableBody>
-              {hashes.map((hash) => (
-                <TableRow key={hash.sha256}>
-                  <TableCell align="left">
-                    <IconButton color="primary" onClick={() => handleView(hash.sha256)}>
-                      <Visibility />
-                    </IconButton>
-                    <IconButton color="error" onClick={() => handleDeleteClick(hash)}>
-                      <Delete />
-                    </IconButton>
-                  </TableCell>
-                  <TableCell>{hash.filename}</TableCell>
-                  <TableCell>{hash.build_id}</TableCell>
-                  <TableCell>{new Date(hash.last_check_at).toLocaleString()}</TableCell>
-                  <TableCell>{hash.alerted_by?.join(', ') || 'None'}</TableCell>
-                  <TableCell>{hash.sha256}</TableCell>
-                </TableRow>
-              ))}
+              {hashes.map((hash: HashStatus) => {
+                const hasProvider = Object.values(hash.providers).some((provider) => provider);
+                return (
+                  <TableRow key={hash.sha256}
+                    style={{ backgroundColor: hasProvider ? 'red' : 'inherit' }}>
+                    <TableCell align="left">
+                      <IconButton color="primary" onClick={() => handleView(hash.sha256)}>
+                        <Visibility />
+                      </IconButton>
+                      <IconButton color="error" onClick={() => handleDeleteClick(hash)}>
+                        <Delete />
+                      </IconButton>
+                    </TableCell>
+                    <TableCell>{hash.filename}</TableCell>
+                    <TableCell>{hash.build_id}</TableCell>
+                    <TableCell>{new Date(hash.last_check_at).toLocaleString()}</TableCell>
+                    <TableCell>{hash.alerted_by?.join(', ') || 'None'}</TableCell>
+                    <TableCell>{hash.sha256}</TableCell>
+                  </TableRow>
+                )
+              })}
             </TableBody>
           </Table>
         </TableContainer>
@@ -152,13 +148,7 @@ const HashList: React.FC = () => {
         cancelText="Cancel"
       />
 
-      {/* Notification Snackbar */}
-      <Notification
-        open={notification.open}
-        message={notification.message}
-        severity={notification.severity}
-        onClose={() => setNotification({ ...notification, open: false })}
-      />
+
     </>
   );
 };

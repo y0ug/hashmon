@@ -8,32 +8,51 @@ import {
   Paper,
   Box,
 } from '@mui/material';
-import Notification from './Notification';
 
-const AddHashForm: React.FC = () => {
+interface AddHashFormProps {
+  onHashAdded: () => void;
+  setNotification: React.Dispatch<
+    React.SetStateAction<{
+      open: boolean;
+      message: string;
+      severity: 'success' | 'error';
+    }>
+  >;
+}
+const AddHashForm: React.FC<AddHashFormProps> = ({ onHashAdded, setNotification }) => {
   const [formData, setFormData] = useState<NewHash>({
     sha256: '',
     filename: '',
     build_id: '',
   });
   const [loading, setLoading] = useState<boolean>(false);
-  const [notification, setNotification] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
-    open: false,
-    message: '',
-    severity: 'success',
-  });
+
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+    setFormData({
+      ...formData,
+      [e.target.name]: e.target.value,
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (!formData.sha256 || !formData.filename) {
+      setNotification({
+        open: true,
+        message: 'All fields are required.',
+        severity: 'error',
+      });
+      return;
+    }
+
     setLoading(true);
+
     try {
       await addHash(formData);
-      setNotification({ open: true, message: 'Hash added successfully.', severity: 'success' });
       setFormData({ sha256: '', filename: '', build_id: '' });
+      onHashAdded();
     } catch (error) {
       console.error(error);
       setNotification({ open: true, message: 'Failed to add hash.', severity: 'error' });
@@ -79,12 +98,6 @@ const AddHashForm: React.FC = () => {
           </Button>
         </Box>
       </Paper>
-      <Notification
-        open={notification.open}
-        message={notification.message}
-        severity={notification.severity}
-        onClose={() => setNotification({ ...notification, open: false })}
-      />
     </>
   );
 };

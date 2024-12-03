@@ -12,7 +12,7 @@ const App: React.FC = () => {
           <Typography variant="h6">HashMon Dashboard</Typography>
         </Toolbar>
       </AppBar>
-      <Container sx={{ mt: 4 }}>
+      <Container maxWidth="xl" sx={{ mt: 8 }}>
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/hashes/:sha256" element={<HashPage />} />
