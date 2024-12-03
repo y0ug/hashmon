@@ -28,7 +28,7 @@ func StartWebServer(ctx context.Context, ws *WebServer) (*http.Server, error) {
 		AllowedHeaders:   []string{"Content-Type", "Authorization"},
 		ExposedHeaders:   []string{"Content-Length"},
 		AllowCredentials: true,
-		Debug:            true,
+		Debug:            false,
 	}
 
 	// Create CORS handler
