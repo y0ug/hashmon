@@ -17,7 +17,6 @@ const root = createRoot(rootElement!);
 root.render(
   <StrictMode>
     <ThemeProvider theme={theme} defaultMode="light">
-      {/* CssBaseline kickstart an elegant, consistent, and simple baseline to build upon. */}
       <CssBaseline />
       <App />
     </ThemeProvider>
