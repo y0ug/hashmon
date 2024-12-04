@@ -195,3 +195,76 @@ func (r *RedisDB) IsTokenBlacklisted(tokenString string) (bool, error) {
 	}
 	return exists == 1, nil
 }
+
+// StoreRefreshToken saves a refresh token with associated user and expiration.
+func (r *RedisDB) StoreRefreshToken(token string, userID string, expiresAt time.Time) error {
+	// Define a unique key for the refresh token
+	key := fmt.Sprintf("refresh_token:%s", token)
+
+	// Create a struct to hold the data
+	data := struct {
+		UserID    string    `json:"user_id"`
+		ExpiresAt time.Time `json:"expires_at"`
+	}{
+		UserID:    userID,
+		ExpiresAt: expiresAt,
+	}
+
+	// Serialize the data to JSON
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal refresh token data: %w", err)
+	}
+
+	// Calculate TTL based on expiration time
+	ttl := time.Until(expiresAt)
+	if ttl <= 0 {
+		return fmt.Errorf("invalid expiration time for refresh token")
+	}
+
+	// Store the refresh token with TTL
+	return r.client.Set(r.ctx, key, encoded, ttl).Err()
+}
+
+// ValidateRefreshToken checks if a refresh token is valid and not expired.
+// Returns the associated userID if valid.
+func (r *RedisDB) ValidateRefreshToken(token string) (string, error) {
+	// Define the key for the refresh token
+	key := fmt.Sprintf("refresh_token:%s", token)
+
+	// Get the token data
+	val, err := r.client.Get(r.ctx, key).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return "", fmt.Errorf("refresh token not found")
+		}
+		return "", err
+	}
+
+	// Deserialize the data
+	var data struct {
+		UserID    string    `json:"user_id"`
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	err = json.Unmarshal([]byte(val), &data)
+	if err != nil {
+		return "", fmt.Errorf("failed to unmarshal refresh token data: %w", err)
+	}
+
+	// Check if the token has expired
+	if time.Now().After(data.ExpiresAt) {
+		// Token expired; revoke it
+		r.RevokeRefreshToken(token)
+		return "", fmt.Errorf("refresh token expired")
+	}
+
+	return data.UserID, nil
+}
+
+// RevokeRefreshToken removes a refresh token from the database.
+// // RevokeRefreshToken removes a refresh token from the database.
+func (r *RedisDB) RevokeRefreshToken(token string) error {
+	// Define the key for the refresh token
+	key := fmt.Sprintf("refresh_token:%s", token)
+	return r.client.Del(r.ctx, key).Err()
+}

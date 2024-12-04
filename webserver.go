@@ -71,6 +71,8 @@ func (ws *WebServer) InitRouter() *mux.Router {
 		auth.HandleFunc("/callback", ws.handleCallback).Methods("GET")
 		auth.Handle("/status", authMiddleware(ws)(http.HandlerFunc(ws.handleStatus))).Methods("GET")
 		auth.Handle("/logout", authMiddleware(ws)(http.HandlerFunc(ws.handleLogout))).Methods("POST")
+		auth.HandleFunc("/refresh", ws.handleRefresh).Methods("POST")
+		auth.HandleFunc("/refresh", ws.handleRefresh).Methods("GET")
 		api.Use(authMiddleware(ws))
 	}
 

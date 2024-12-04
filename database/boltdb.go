@@ -54,6 +54,10 @@ func (b *BoltDB) Initialize() error {
 		if err != nil {
 			return fmt.Errorf("create BlacklistedTokens bucket: %v", err)
 		}
+		_, err = tx.CreateBucketIfNotExists([]byte("RefreshTokens"))
+		if err != nil {
+			return fmt.Errorf("create RefreshTokens bucket: %v", err)
+		}
 		return nil
 	})
 }
@@ -342,4 +346,63 @@ func (b *BoltDB) IsTokenBlacklisted(tokenString string) (bool, error) {
 	}
 
 	return true, nil
+}
+
+// StoreRefreshToken saves a refresh token with associated user and expiration
+func (b *BoltDB) StoreRefreshToken(token string, userID string, expiresAt time.Time) error {
+	return b.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("RefreshTokens"))
+		if bucket == nil {
+			return fmt.Errorf("RefreshTokens bucket not found")
+		}
+		data := struct {
+			UserID    string    `json:"user_id"`
+			ExpiresAt time.Time `json:"expires_at"`
+		}{
+			UserID:    userID,
+			ExpiresAt: expiresAt,
+		}
+		encoded, err := json.Marshal(data)
+		if err != nil {
+			return err
+		}
+		return bucket.Put([]byte(token), encoded)
+	})
+}
+
+// ValidateRefreshToken checks if a refresh token is valid and not expired
+func (b *BoltDB) ValidateRefreshToken(token string) (string, error) {
+	var data struct {
+		UserID    string    `json:"user_id"`
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	err := b.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("RefreshTokens"))
+		if bucket == nil {
+			return fmt.Errorf("RefreshTokens bucket not found")
+		}
+		v := bucket.Get([]byte(token))
+		if v == nil {
+			return fmt.Errorf("token not found")
+		}
+		return json.Unmarshal(v, &data)
+	})
+	if err != nil {
+		return "", err
+	}
+	if time.Now().After(data.ExpiresAt) {
+		return "", fmt.Errorf("token expired")
+	}
+	return data.UserID, nil
+}
+
+// RevokeRefreshToken removes a refresh token from the database
+func (b *BoltDB) RevokeRefreshToken(token string) error {
+	return b.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("RefreshTokens"))
+		if bucket == nil {
+			return fmt.Errorf("RefreshTokens bucket not found")
+		}
+		return bucket.Delete([]byte(token))
+	})
 }

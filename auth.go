@@ -17,9 +17,10 @@ import (
 )
 
 type TokenResponse struct {
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-	ExpiresIn   int64  `json:"expires_in"`
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int64  `json:"expires_in"`
 }
 
 // Generate a random state string for CSRF protection
@@ -45,6 +46,50 @@ func (ws *WebServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	url := ws.config.OAuth2Config.AuthCodeURL(state)
 	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
+}
+
+// generateTokens creates both access and refresh JWT tokens
+func generateTokens(claims jwt.MapClaims, config *config.WebserverConfig) (*TokenResponse, error) {
+	// Define access token expiration (e.g., 15 minutes)
+	accessExpirationTime := time.Now().Add(15 * time.Minute)
+	accessClaims := jwt.MapClaims{
+		"sub":   claims["sub"],
+		"name":  claims["name"],
+		"email": claims["email"],
+		"exp":   accessExpirationTime.Unix(),
+		"iat":   time.Now().Unix(),
+		// Add more custom claims as needed
+	}
+
+	// Create access token
+	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS256, accessClaims)
+	accessTokenString, err := accessToken.SignedString(config.JwtSecret)
+	if err != nil {
+		return nil, err
+	}
+
+	// Define refresh token expiration (e.g., 7 days)
+	refreshExpirationTime := time.Now().Add(7 * 24 * time.Hour)
+	refreshClaims := jwt.MapClaims{
+		"sub":  claims["sub"],
+		"exp":  refreshExpirationTime.Unix(),
+		"iat":  time.Now().Unix(),
+		"type": "refresh",
+	}
+
+	// Create refresh token
+	refreshToken := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshClaims)
+	refreshTokenString, err := refreshToken.SignedString(config.JwtSecret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &TokenResponse{
+		AccessToken:  accessTokenString,
+		RefreshToken: refreshTokenString,
+		TokenType:    "Bearer",
+		ExpiresIn:    int64(accessExpirationTime.Sub(time.Now()).Seconds()),
+	}, nil
 }
 
 func (ws *WebServer) handleCallback(w http.ResponseWriter, r *http.Request) {
@@ -82,30 +127,57 @@ func (ws *WebServer) handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to decode ID token", http.StatusInternalServerError)
 		return
 	}
-
-	// Generate your own JWT for the client
-	jwtToken, err := generateJWT(userInfo, ws.config)
+	// Generate both access and refresh tokens
+	tokens, err := generateTokens(userInfo, ws.config)
 	if err != nil {
-		fmt.Printf("Failed to generate JWT: %v\n", err)
-		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+		fmt.Printf("Failed to generate tokens: %v\n", err)
+		http.Error(w, "Failed to generate tokens", http.StatusInternalServerError)
+		return
+	}
+
+	// Extracting the exp
+	expFloat, ok := userInfo["exp"].(float64)
+	if !ok {
+		http.Error(w, "Invalid expiration in token", http.StatusUnauthorized)
+		return
+	}
+	// Store the refresh token in the database
+	err = ws.Monitor.Config.Database.StoreRefreshToken(tokens.RefreshToken,
+		userInfo["sub"].(string),
+		time.Unix(int64(expFloat), 0))
+	if err != nil {
+		fmt.Printf("Failed to store refresh token: %v\n", err)
+		http.Error(w, "Failed to store refresh token", http.StatusInternalServerError)
 		return
 	}
 
 	// Define token expiration (e.g., 1 hour)
 	expirationTime := time.Now().Add(1 * time.Hour)
 
-	cookie := &http.Cookie{
+	accessCookie := &http.Cookie{
 		Name:     "access_token",
-		Value:    jwtToken,
+		Value:    token.AccessToken,
 		Expires:  expirationTime,
 		HttpOnly: true,                 // Prevents JavaScript access
-		Secure:   true,                 // Ensures the cookie is sent over HTTPS
+		Secure:   false,                // Ensures the cookie is sent over HTTPS
 		Path:     "/",                  // Cookie is valid for all paths
 		SameSite: http.SameSiteLaxMode, // Adjust based on your needs
 	}
 
 	// Set the cookie in the response
-	http.SetCookie(w, cookie)
+	http.SetCookie(w, accessCookie)
+
+	// Set the refresh token in a secure HttpOnly cookie
+	refreshCookie := &http.Cookie{
+		Name:     "refresh_token",
+		Value:    tokens.RefreshToken,
+		Expires:  time.Now().Add(7 * 24 * time.Hour),
+		HttpOnly: true,
+		Secure:   false,
+		Path:     "/auth/refresh",
+		SameSite: http.SameSiteLaxMode,
+	}
+	http.SetCookie(w, refreshCookie)
 
 	http.Redirect(w, r, ws.config.RedirectURL, http.StatusSeeOther)
 
@@ -169,33 +241,6 @@ func decodeIDToken(idToken string, config *config.WebserverConfig) (jwt.MapClaim
 	return nil, fmt.Errorf("invalid token")
 }
 
-// generateJWT creates a JWT token with user claims
-func generateJWT(claims jwt.MapClaims, config *config.WebserverConfig) (string, error) {
-	// Define token expiration
-	expirationTime := time.Now().Add(1 * time.Hour)
-
-	// Create the JWT claims, including standard claims
-	tokenClaims := jwt.MapClaims{
-		"sub":   claims["sub"], // Subject (unique identifier for the user)
-		"name":  claims["name"],
-		"email": claims["email"],
-		"exp":   expirationTime.Unix(),
-		"iat":   time.Now().Unix(),
-		// Add more custom claims as needed
-	}
-
-	// Create the token using HS256 (HMAC) signing method
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, tokenClaims)
-
-	// Sign the token with your secret
-	tokenString, err := token.SignedString(config.JwtSecret)
-	if err != nil {
-		return "", err
-	}
-
-	return tokenString, nil
-}
-
 func authMiddleware(ws *WebServer) func(http.Handler) http.Handler {
 	// Fetch JWKS at startup
 	// jwks, err := jwk.Fetch(context.Background(), fmt.Sprintf("https://%s/.well-known/jwks.json", config.Auth0Domain))
@@ -231,7 +276,7 @@ func authMiddleware(ws *WebServer) func(http.Handler) http.Handler {
 				return
 			}
 
-			// 4. Check if the token is blacklisted
+			// Check if the token is blacklisted
 			blacklisted, err := ws.Monitor.Config.Database.IsTokenBlacklisted(tokenString)
 			if err != nil {
 				http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -244,7 +289,7 @@ func authMiddleware(ws *WebServer) func(http.Handler) http.Handler {
 
 			// Parse and validate the token
 			token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-				// Ensure token is signed with RSA
+				// Ensure token is signed with HS256
 				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 					return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 				}
@@ -256,6 +301,7 @@ func authMiddleware(ws *WebServer) func(http.Handler) http.Handler {
 				http.Error(w, "Invalid token", http.StatusUnauthorized)
 				return
 			}
+
 			// Validate token claims
 			if claims, ok := token.Claims.(jwt.MapClaims); ok {
 				// Validate expiration
@@ -265,14 +311,6 @@ func authMiddleware(ws *WebServer) func(http.Handler) http.Handler {
 				}
 
 				// (Optional) Validate other claims like issuer, audience, etc.
-				// Example:
-				/*
-				   expectedIssuer := "https://your-authentik-domain.com/"
-				   if iss, ok := claims["iss"].(string); !ok || iss != expectedIssuer {
-				       http.Error(w, "Invalid issuer", http.StatusUnauthorized)
-				       return
-				   }
-				*/
 
 				// Attach claims to the request context
 				ctx := context.WithValue(r.Context(), "user", claims)
@@ -337,86 +375,231 @@ type LogoutResponse struct {
 
 // handleLogout logs the user out by removing the JWT cookie and blacklisting the token.
 func (ws *WebServer) handleLogout(w http.ResponseWriter, r *http.Request) {
-	var tokenString string
+	var accessTokenString, refreshTokenString string
 
-	// 1. Extract the token from the Authorization header
+	// Extract access token from Authorization header or cookie
 	authHeader := r.Header.Get("Authorization")
 	if authHeader != "" {
 		parts := strings.SplitN(authHeader, " ", 2)
 		if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
-			tokenString = parts[1]
+			accessTokenString = parts[1]
 		}
 	}
-
-	// 2. If not found in header, extract from cookie
-	if tokenString == "" {
+	if accessTokenString == "" {
 		cookie, err := r.Cookie("access_token")
 		if err == nil {
-			tokenString = cookie.Value
+			accessTokenString = cookie.Value
 		}
 	}
 
-	// 3. If token is still not found, respond with unauthorized
-	if tokenString == "" {
-		http.Error(w, "Authorization token not found", http.StatusUnauthorized)
+	// Extract refresh token from cookie
+	cookie, err := r.Cookie("refresh_token")
+	if err == nil {
+		refreshTokenString = cookie.Value
+	}
+
+	// Revoke access token if present
+	if accessTokenString != "" {
+		err := ws.Monitor.Config.Database.AddBlacklistedToken(accessTokenString, getTokenExpiration(accessTokenString))
+		if err != nil {
+			logrus.WithError(err).Error("Failed to blacklist access token during logout")
+			http.Error(w, "Failed to logout", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Revoke refresh token if present
+	if refreshTokenString != "" {
+		err := ws.Monitor.Config.Database.RevokeRefreshToken(refreshTokenString)
+		if err != nil {
+			logrus.WithError(err).Error("Failed to revoke refresh token during logout")
+			http.Error(w, "Failed to logout", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Remove the access token cookie
+	expiredAccessCookie := &http.Cookie{
+		Name:     "access_token",
+		Value:    "",
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   true,
+		Path:     "/",
+		SameSite: http.SameSiteLaxMode,
+	}
+	http.SetCookie(w, expiredAccessCookie)
+
+	// Remove the refresh token cookie
+	expiredRefreshCookie := &http.Cookie{
+		Name:     "refresh_token",
+		Value:    "",
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   true,
+		Path:     "/auth/refresh",
+		SameSite: http.SameSiteLaxMode,
+	}
+	http.SetCookie(w, expiredRefreshCookie)
+
+	// Respond to the client
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(LogoutResponse{
+		Message: "Successfully logged out",
+	})
+}
+
+// Helper function to extract token expiration
+func getTokenExpiration(tokenString string) int64 {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		return nil, nil // We don't need to validate the token here
+	})
+	if err != nil || !token.Valid {
+		return time.Now().Unix()
+	}
+	if claims, ok := token.Claims.(jwt.MapClaims); ok {
+		if exp, ok := claims["exp"].(float64); ok {
+			return int64(exp)
+		}
+	}
+	return time.Now().Unix()
+}
+
+func (ws *WebServer) handleRefresh(w http.ResponseWriter, r *http.Request) {
+	// Extract refresh token from cookie
+	cookie, err := r.Cookie("refresh_token")
+	if err != nil {
+		http.Error(w, "Refresh token not found", http.StatusUnauthorized)
+		return
+	}
+	refreshTokenString := cookie.Value
+
+	// Validate the refresh token
+	userID, err := ws.Monitor.Config.Database.ValidateRefreshToken(refreshTokenString)
+	if err != nil {
+		http.Error(w, "Invalid or expired refresh token", http.StatusUnauthorized)
 		return
 	}
 
-	// 4. Parse the token to extract expiration time
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		// Ensure the signing method is HS256 or RS256 based on your setup
-		switch token.Method.(type) {
-		case *jwt.SigningMethodHMAC:
-			return ws.config.JwtSecret, nil
-		default:
+	// Optionally, you can parse the refresh token to extract claims
+	token, err := jwt.Parse(refreshTokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
+		return ws.config.JwtSecret, nil
 	})
-
 	if err != nil || !token.Valid {
-		http.Error(w, "Invalid token", http.StatusUnauthorized)
+		http.Error(w, "Invalid refresh token", http.StatusUnauthorized)
 		return
 	}
 
-	// 5. Extract claims to get expiration time
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
 		http.Error(w, "Invalid token claims", http.StatusUnauthorized)
 		return
 	}
 
-	var exp int64
-	if expFloat, ok := claims["exp"].(float64); ok {
-		exp = int64(expFloat)
-	} else {
-		http.Error(w, "Invalid expiration in token", http.StatusUnauthorized)
+	// Optionally, check if the token type is 'refresh'
+	if tokenType, ok := claims["type"].(string); !ok || tokenType != "refresh" {
+		http.Error(w, "Invalid token type", http.StatusUnauthorized)
 		return
 	}
 
-	// 6. Add the token to the blacklist
-	err = ws.Monitor.Config.Database.AddBlacklistedToken(tokenString, exp)
+	// Retrieve user information from database or cache as needed
+	// For simplicity, we'll assume user information is stored in the token claims
+
+	// Generate new access token
+	newAccessToken, err := generateAccessToken(claims, ws.config)
 	if err != nil {
-		logrus.WithError(err).Error("Failed to blacklist token during logout")
-		http.Error(w, "Failed to logout", http.StatusInternalServerError)
+		http.Error(w, "Failed to generate access token", http.StatusInternalServerError)
 		return
 	}
 
-	// 7. Remove the cookie by setting it to expire in the past
-	expiredCookie := &http.Cookie{
+	// Optionally, implement refresh token rotation
+	// Generate a new refresh token and revoke the old one
+	newRefreshToken, err := generateRefreshToken(claims, ws.config)
+	if err != nil {
+		http.Error(w, "Failed to generate refresh token", http.StatusInternalServerError)
+		return
+	}
+
+	// Store the new refresh token
+	err = ws.Monitor.Config.Database.StoreRefreshToken(newRefreshToken, userID, time.Now().Add(7*24*time.Hour))
+	if err != nil {
+		http.Error(w, "Failed to store refresh token", http.StatusInternalServerError)
+		return
+	}
+
+	// Revoke the old refresh token
+	err = ws.Monitor.Config.Database.RevokeRefreshToken(refreshTokenString)
+	if err != nil {
+		http.Error(w, "Failed to revoke old refresh token", http.StatusInternalServerError)
+		return
+	}
+
+	// Set the new access token in a cookie
+	accessExpirationTime := time.Now().Add(15 * time.Minute)
+	accessCookie := &http.Cookie{
 		Name:     "access_token",
-		Value:    "",
-		Expires:  time.Unix(0, 0), // Expired in the past
-		MaxAge:   -1,              // Delete the cookie
+		Value:    newAccessToken,
+		Expires:  accessExpirationTime,
 		HttpOnly: true,
-		Secure:   true, // Ensure this matches your cookie settings
+		Secure:   true,
 		Path:     "/",
 		SameSite: http.SameSiteLaxMode,
 	}
-	http.SetCookie(w, expiredCookie)
+	http.SetCookie(w, accessCookie)
 
-	// 8. Respond to the client
+	// Set the new refresh token in a cookie
+	refreshCookie := &http.Cookie{
+		Name:     "refresh_token",
+		Value:    newRefreshToken,
+		Expires:  time.Now().Add(7 * 24 * time.Hour),
+		HttpOnly: true,
+		Secure:   true,
+		Path:     "/auth/refresh",
+		SameSite: http.SameSiteLaxMode,
+	}
+	http.SetCookie(w, refreshCookie)
+
+	// Respond with the new access token
+	response := TokenResponse{
+		AccessToken:  newAccessToken,
+		RefreshToken: newRefreshToken,
+		TokenType:    "Bearer",
+		ExpiresIn:    int64(accessExpirationTime.Sub(time.Now()).Seconds()),
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(LogoutResponse{
-		Message: "Successfully logged out",
-	})
+	json.NewEncoder(w).Encode(response)
+}
+
+// Helper functions to generate access and refresh tokens separately
+
+func generateAccessToken(claims jwt.MapClaims, config *config.WebserverConfig) (string, error) {
+	accessExpirationTime := time.Now().Add(15 * time.Minute)
+	accessClaims := jwt.MapClaims{
+		"sub":   claims["sub"],
+		"name":  claims["name"],
+		"email": claims["email"],
+		"exp":   accessExpirationTime.Unix(),
+		"iat":   time.Now().Unix(),
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, accessClaims)
+	return token.SignedString(config.JwtSecret)
+}
+
+func generateRefreshToken(claims jwt.MapClaims, config *config.WebserverConfig) (string, error) {
+	refreshExpirationTime := time.Now().Add(7 * 24 * time.Hour)
+	refreshClaims := jwt.MapClaims{
+		"sub":  claims["sub"],
+		"exp":  refreshExpirationTime.Unix(),
+		"iat":  time.Now().Unix(),
+		"type": "refresh",
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshClaims)
+	return token.SignedString(config.JwtSecret)
 }
