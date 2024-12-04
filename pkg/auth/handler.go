@@ -152,8 +152,8 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store your application's refresh token
-	err = h.Database.StoreRefreshToken(newRefreshToken, userID, time.Now().Add(7*24*time.Hour))
+	// Store your application's refresh token with expiration from config
+	err = h.Database.StoreRefreshToken(newRefreshToken, userID, time.Now().Add(h.Config.RefreshTokenExpiration))
 	if err != nil {
 		http.Error(w, "Failed to store refresh token", http.StatusInternalServerError)
 		return
@@ -167,8 +167,9 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		AccessToken:  newAccessToken,
 		RefreshToken: newRefreshToken,
 		TokenType:    "Bearer",
-		ExpiresIn:    int64(time.Until(time.Now().Add(15 * time.Minute)).Seconds()),
+		ExpiresIn:    int64(time.Until(time.Now().Add(h.Config.AccessTokenExpiration)).Seconds()),
 	}
+
 	setAuthCookies(w, tokens, h.Config)
 
 	// Optionally, respond with tokens in the response body
@@ -256,9 +257,9 @@ func (h *Handler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		Expires:  time.Unix(0, 0),
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   false,
+		Secure:   h.Config.SecureCookie,
 		Path:     "/",
-		SameSite: http.SameSiteLaxMode,
+		SameSite: h.Config.CookieSameSite,
 	}
 	http.SetCookie(w, expiredAccessCookie)
 
@@ -269,9 +270,9 @@ func (h *Handler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		Expires:  time.Unix(0, 0),
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   false,
+		Secure:   h.Config.SecureCookie,
 		Path:     "/auth/refresh",
-		SameSite: http.SameSiteLaxMode,
+		SameSite: h.Config.CookieSameSite,
 	}
 	http.SetCookie(w, expiredRefreshCookie)
 
@@ -377,7 +378,8 @@ func (h *Handler) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 	// Use the access token to get the user's info
 	userInfo, err := h.getUserInfo(providerTokens.AccessToken)
 	if err != nil {
-		http.Error(w, "Failed to retrieve user info", http.StatusInternalServerError)
+		logrus.WithError(err).Error("Failed to retrieve user info")
+		http.Error(w, "Failed to retrieve user info", http.StatusUnauthorized)
 		return
 	}
 
@@ -386,7 +388,7 @@ func (h *Handler) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		"sub":   userInfo.Sub,
 		"name":  userInfo.Name,
 		"email": userInfo.Email,
-		"exp":   time.Now().Add(15 * time.Minute).Unix(),
+		"exp":   time.Now().Add(h.Config.AccessTokenExpiration).Unix(),
 		"iat":   time.Now().Unix(),
 	}
 
@@ -405,7 +407,7 @@ func (h *Handler) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Store your application's new refresh token and revoke the old one
-	err = h.Database.StoreRefreshToken(newRefreshToken, userID, time.Now().Add(7*24*time.Hour))
+	err = h.Database.StoreRefreshToken(newRefreshToken, userID, time.Now().Add(h.Config.RefreshTokenExpiration))
 	if err != nil {
 		http.Error(w, "Failed to store refresh token", http.StatusInternalServerError)
 		return
@@ -417,7 +419,7 @@ func (h *Handler) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		AccessToken:  newAccessToken,
 		RefreshToken: newRefreshToken,
 		TokenType:    "Bearer",
-		ExpiresIn:    int64(time.Until(time.Now().Add(15 * time.Minute)).Seconds()),
+		ExpiresIn:    int64(time.Until(time.Now().Add(h.Config.AccessTokenExpiration)).Seconds()),
 	}
 	setAuthCookies(w, tokens, h.Config)
 

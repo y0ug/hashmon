@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
@@ -33,8 +35,8 @@ func validateState(state string) bool {
 
 // generateTokens creates both access and refresh JWT tokens.
 func generateTokens(claims jwt.MapClaims, config *Config) (*TokenResponse, error) {
-	// Define access token expiration (e.g., 15 minutes)
-	accessExpirationTime := time.Now().Add(15 * time.Minute)
+	// Define access token expiration using configuration
+	accessExpirationTime := time.Now().Add(config.AccessTokenExpiration)
 	accessClaims := jwt.MapClaims{
 		"sub":   claims["sub"],
 		"name":  claims["name"],
@@ -50,8 +52,8 @@ func generateTokens(claims jwt.MapClaims, config *Config) (*TokenResponse, error
 		return nil, err
 	}
 
-	// Define refresh token expiration (e.g., 7 days)
-	refreshExpirationTime := time.Now().Add(7 * 24 * time.Hour)
+	// Define refresh token expiration using configuration
+	refreshExpirationTime := time.Now().Add(config.RefreshTokenExpiration)
 	refreshClaims := jwt.MapClaims{
 		"sub":  claims["sub"],
 		"exp":  refreshExpirationTime.Unix(),
@@ -70,13 +72,13 @@ func generateTokens(claims jwt.MapClaims, config *Config) (*TokenResponse, error
 		AccessToken:  accessTokenString,
 		RefreshToken: refreshTokenString,
 		TokenType:    "Bearer",
-		ExpiresIn:    int64(accessExpirationTime.Sub(time.Now()).Seconds()),
+		ExpiresIn:    int64(time.Until(accessExpirationTime).Seconds()),
 	}, nil
 }
 
 // generateAccessToken creates a new access JWT token.
 func generateAccessToken(claims jwt.MapClaims, config *Config) (string, error) {
-	accessExpirationTime := time.Now().Add(15 * time.Minute)
+	accessExpirationTime := time.Now().Add(config.AccessTokenExpiration)
 	accessClaims := jwt.MapClaims{
 		"sub":   claims["sub"],
 		"name":  claims["name"],
@@ -91,7 +93,7 @@ func generateAccessToken(claims jwt.MapClaims, config *Config) (string, error) {
 
 // generateRefreshToken creates a new refresh JWT token.
 func generateRefreshToken(claims jwt.MapClaims, config *Config) (string, error) {
-	refreshExpirationTime := time.Now().Add(7 * 24 * time.Hour)
+	refreshExpirationTime := time.Now().Add(config.RefreshTokenExpiration)
 	refreshClaims := jwt.MapClaims{
 		"sub":  claims["sub"],
 		"exp":  refreshExpirationTime.Unix(),
@@ -164,8 +166,9 @@ func getTokenExpiration(tokenString string) int64 {
 
 // setAuthCookies sets the authentication tokens in HTTP cookies.
 func setAuthCookies(w http.ResponseWriter, tokens *TokenResponse, config *Config) {
-	// Define token expiration
-	accessExpirationTime := time.Now().Add(15 * time.Minute)
+	// Define token expiration using configuration
+	accessExpirationTime := time.Now().Add(config.AccessTokenExpiration)
+	refreshExpirationTime := time.Now().Add(config.RefreshTokenExpiration)
 
 	accessCookie := &http.Cookie{
 		Name:     "access_token",
@@ -184,7 +187,7 @@ func setAuthCookies(w http.ResponseWriter, tokens *TokenResponse, config *Config
 	refreshCookie := &http.Cookie{
 		Name:     "refresh_token",
 		Value:    tokens.RefreshToken,
-		Expires:  time.Now().Add(7 * 24 * time.Hour),
+		Expires:  refreshExpirationTime,
 		HttpOnly: true,
 		Secure:   false, // Adjust based on your needs
 		Path:     "/auth/refresh",
@@ -256,4 +259,55 @@ func (h *Handler) buildEndSessionURL(r *http.Request) (string, error) {
 
 	u.RawQuery = params.Encode()
 	return u.String(), nil
+}
+
+// parseDurationString parses a duration string formatted as "minutes=1, hours=2, days=3, seconds=30"
+func parseDurationString(s string) (time.Duration, error) {
+	parts := strings.Split(s, ",")
+	var totalDuration time.Duration
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		keyValue := strings.SplitN(part, "=", 2)
+		if len(keyValue) != 2 {
+			return 0, fmt.Errorf("invalid format for part: '%s'", part)
+		}
+		key := strings.ToLower(strings.TrimSpace(keyValue[0]))
+		valueStr := strings.TrimSpace(keyValue[1])
+		value, err := strconv.Atoi(valueStr)
+		if err != nil {
+			return 0, fmt.Errorf("invalid value for %s: '%s'", key, valueStr)
+		}
+
+		switch key {
+		case "minutes":
+			totalDuration += time.Duration(value) * time.Minute
+		case "hours":
+			totalDuration += time.Duration(value) * time.Hour
+		case "days":
+			totalDuration += time.Duration(value) * 24 * time.Hour
+		case "seconds":
+			totalDuration += time.Duration(value) * time.Second
+		default:
+			return 0, fmt.Errorf("unknown time unit: '%s'", key)
+		}
+	}
+
+	return totalDuration, nil
+}
+
+func parseSameSite(s string) (http.SameSite, error) {
+	switch strings.ToLower(s) {
+	case "lax":
+		return http.SameSiteLaxMode, nil
+	case "strict":
+		return http.SameSiteStrictMode, nil
+	case "none":
+		return http.SameSiteNoneMode, nil
+	default:
+		return http.SameSiteDefaultMode, fmt.Errorf("invalid SameSite value: '%s'", s)
+	}
 }
