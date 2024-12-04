@@ -1,11 +1,12 @@
 import React, { useContext } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { Helmet, HelmetProvider } from 'react-helmet-async';
-import { Container, AppBar, Toolbar, Typography, Button } from '@mui/material';
+import { Container, AppBar, Toolbar, Typography, Button, Avatar, Box } from '@mui/material';
 import HomePage from './pages/HomePage';
 import HashPage from './pages/HashPage';
 import AuthCallback from './components/AuthCallback';
 import LoginPage from './pages/LoginPage'; // Create this component
+import ProfilePage from './pages/ProfilePage'; // Create this component
 import NotFoundPage from './pages/NotFoundPage'; // Create this component
 import { AuthProvider, AuthContext } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -23,8 +24,7 @@ const App: React.FC = () => {
 };
 
 const AppContent: React.FC = () => {
-  const { isAuthenticated, login, logout, loading } = useContext(AuthContext);
-
+  const { isAuthenticated, login, logout, loading, user } = useContext(AuthContext);
   return (
     <>
       <Helmet>
@@ -38,10 +38,18 @@ const AppContent: React.FC = () => {
           </Typography>
           {!loading && (
             <>
-              {isAuthenticated ? (
-                <Button color="inherit" onClick={logout}>
-                  Logout
-                </Button>
+              {isAuthenticated && user ? (
+                <Box display="flex" alignItems="center">
+                  <Avatar sx={{ bgcolor: 'secondary.main', marginRight: 1 }}>
+                    {user.name.charAt(0).toUpperCase()}
+                  </Avatar>
+                  <Typography variant="body1" sx={{ marginRight: 2 }}>
+                    {user.name}
+                  </Typography>
+                  <Button color="inherit" onClick={logout}>
+                    Logout
+                  </Button>
+                </Box>
               ) : (
                 <Button color="inherit" onClick={login}>
                   Login
@@ -58,6 +66,14 @@ const AppContent: React.FC = () => {
             element={
               <ProtectedRoute>
                 <HomePage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/profile"
+            element={
+              <ProtectedRoute>
+                <ProfilePage />
               </ProtectedRoute>
             }
           />
