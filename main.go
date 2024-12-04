@@ -11,8 +11,9 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/y0ug/hashmon/apis"
 	"github.com/y0ug/hashmon/config"
-	"github.com/y0ug/hashmon/database" // New import for database abstraction
+	"github.com/y0ug/hashmon/database" // Database abstraction
 	"github.com/y0ug/hashmon/notifications"
+	"github.com/y0ug/hashmon/pkg/auth"
 	"golang.org/x/time/rate"
 )
 
@@ -57,7 +58,7 @@ func main() {
 		defer db.Close()
 		logrus.Info("BoltDB initialized successfully")
 	case "redis":
-		// // Initialize RedisDB (assuming Redis configuration is in config)
+		// Initialize RedisDB (assuming Redis configuration is in config)
 		// db, err = database.NewRedisDB(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)
 		// if err != nil {
 		// 	logrus.Fatalf("Failed to initialize RedisDB: %v", err)
@@ -67,6 +68,21 @@ func main() {
 	default:
 		logrus.Fatalf("Unsupported database type: %s", cfg.DatabaseType)
 	}
+
+	// Ensure the database implements auth.Database interface
+	authDB, ok := db.(auth.Database)
+	if !ok {
+		logrus.Fatal("Database does not implement the required authentication interface")
+	}
+
+	// Initialize Auth Config
+	authConfig, err := auth.NewConfig()
+	if err != nil {
+		logrus.Fatalf("Failed to initialize auth config: %v", err)
+	}
+
+	// Initialize Auth Handler
+	authHandler := auth.NewHandler(authConfig, authDB)
 
 	// Initialize API clients
 	var apiClients []apis.APIClient
@@ -91,6 +107,7 @@ func main() {
 		logrus.Fatal("No API clients initialized. Exiting.")
 	}
 
+	// Set rate limiters for API clients
 	for _, apiClient := range apiClients {
 		for _, rl := range cfg.RateLimits {
 			if rl.APIName == apiClient.ProviderName() {
@@ -154,7 +171,7 @@ func main() {
 	logrus.WithField("record_count", len(hashRecords)).Info("Hashes loaded successfully")
 
 	// Initialize Web Server
-	webServer := NewWebServer(monitor, cfg.WebserverConfig)
+	webServer := NewWebServer(monitor, cfg.WebserverConfig, authConfig, authHandler)
 
 	// Create a cancellable context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -164,7 +181,7 @@ func main() {
 	serverErrors := make(chan error, 1)
 
 	// Start the web server
-	server, err := StartWebServer(ctx, webServer) // Adjust as needed
+	server, err := StartWebServer(ctx, webServer)
 	if err != nil {
 		logrus.Fatalf("Failed to start web server: %v", err)
 	}

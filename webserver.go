@@ -10,14 +10,18 @@ import (
 	"github.com/rs/cors"
 	"github.com/y0ug/hashmon/config"
 	"github.com/y0ug/hashmon/models"
+	"github.com/y0ug/hashmon/pkg/auth"
 )
 
 // WebServer holds the data needed for handling HTTP requests.
 type WebServer struct {
-	Monitor *Monitor
-	config  *config.WebserverConfig
+	Monitor     *Monitor
+	config      *config.WebserverConfig
+	authConfig  *auth.Config
+	authHandler *auth.Handler
 }
 
+// StartWebServer starts the HTTP server.
 func StartWebServer(ctx context.Context, ws *WebServer) (*http.Server, error) {
 	router := ws.InitRouter()
 
@@ -42,7 +46,6 @@ func StartWebServer(ctx context.Context, ws *WebServer) (*http.Server, error) {
 
 	// Start the server in a separate goroutine
 	go func() {
-		// if err := server.ListenAndServeTLS("cert.pem", "key.pem"); err != nil && err != http.ErrServerClosed {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			fmt.Printf("ListenAndServe(): %v", err)
 		}
@@ -53,34 +56,41 @@ func StartWebServer(ctx context.Context, ws *WebServer) (*http.Server, error) {
 }
 
 // NewWebServer initializes a new WebServer.
-func NewWebServer(monitor *Monitor, config *config.WebserverConfig) *WebServer {
+func NewWebServer(monitor *Monitor, config *config.WebserverConfig, authConfig *auth.Config, authHandler *auth.Handler) *WebServer {
 	return &WebServer{
-		Monitor: monitor,
-		config:  config,
+		Monitor:     monitor,
+		config:      config,
+		authConfig:  authConfig,
+		authHandler: authHandler,
 	}
 }
 
+// InitRouter initializes the HTTP routes.
 func (ws *WebServer) InitRouter() *mux.Router {
 	r := mux.NewRouter()
 	api := r.PathPrefix("/api").Subrouter()
-	auth := r.PathPrefix("/auth").Subrouter()
+	authRouter := r.PathPrefix("/auth").Subrouter()
 
-	// Routes
-	if ws.config.AuthType == "oauth2" {
-		auth.HandleFunc("/login", ws.handleLogin).Methods("GET")
-		auth.HandleFunc("/callback", ws.handleCallback).Methods("GET")
-		auth.Handle("/status", authMiddleware(ws)(http.HandlerFunc(ws.handleStatus))).Methods("GET")
-		auth.Handle("/logout", authMiddleware(ws)(http.HandlerFunc(ws.handleLogout))).Methods("POST")
-		auth.HandleFunc("/refresh", ws.handleRefresh).Methods("POST")
-		auth.HandleFunc("/refresh", ws.handleRefresh).Methods("GET")
-		api.Use(authMiddleware(ws))
+	// Authentication routes
+	if ws.authConfig.AuthType == "oauth2" {
+		authRouter.HandleFunc("/login", ws.authHandler.HandleLogin).Methods("GET")
+		authRouter.HandleFunc("/callback", ws.authHandler.HandleCallback).Methods("GET")
+		authRouter.Handle("/status", ws.authHandler.AuthMiddleware(http.HandlerFunc(ws.authHandler.HandleStatus))).Methods("GET")
+		authRouter.Handle("/logout", ws.authHandler.AuthMiddleware(http.HandlerFunc(ws.authHandler.HandleLogout))).Methods("POST")
+		authRouter.Handle("/logout", ws.authHandler.AuthMiddleware(http.HandlerFunc(ws.authHandler.HandleLogout))).Methods("GET")
+		authRouter.HandleFunc("/refresh", ws.authHandler.HandleRefresh).Methods("POST")
+		authRouter.HandleFunc("/refresh", ws.authHandler.HandleRefresh).Methods("GET")
+
+		api.Use(ws.authHandler.AuthMiddleware)
 	}
 
+	// API routes
 	api.HandleFunc("/hashes", ws.handleGetHashes).Methods(http.MethodGet)
 	api.HandleFunc("/hashes/{sha256}", ws.handleGetHashDetail).Methods(http.MethodGet)
 	api.HandleFunc("/hashes", ws.handleAddHash).Methods(http.MethodPut)
 	api.HandleFunc("/hashes/{sha256}", ws.handleDeleteHash).Methods(http.MethodDelete)
 
+	// Static file serving
 	r.PathPrefix("/").Handler(
 		http.StripPrefix("/", http.FileServer(http.Dir("./build/"))))
 	return r

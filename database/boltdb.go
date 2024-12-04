@@ -9,6 +9,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/y0ug/hashmon/models"
+	"github.com/y0ug/hashmon/pkg/auth"
 	"go.etcd.io/bbolt"
 )
 
@@ -57,6 +58,15 @@ func (b *BoltDB) Initialize() error {
 		_, err = tx.CreateBucketIfNotExists([]byte("RefreshTokens"))
 		if err != nil {
 			return fmt.Errorf("create RefreshTokens bucket: %v", err)
+		}
+		_, err = tx.CreateBucketIfNotExists([]byte("ProviderRefreshTokens"))
+		if err != nil {
+			return fmt.Errorf("create ProviderRefreshTokens bucket: %v", err)
+		}
+		// New bucket for provider tokens
+		_, err = tx.CreateBucketIfNotExists([]byte("ProviderTokens"))
+		if err != nil {
+			return fmt.Errorf("create ProviderTokens bucket: %v", err)
 		}
 		return nil
 	})
@@ -405,4 +415,56 @@ func (b *BoltDB) RevokeRefreshToken(token string) error {
 		}
 		return bucket.Delete([]byte(token))
 	})
+}
+
+// StoreProviderTokens stores the provider's tokens for a user.
+func (b *BoltDB) StoreProviderTokens(userID string, tokens auth.ProviderTokens) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	data, err := json.Marshal(tokens)
+	if err != nil {
+		return fmt.Errorf("failed to marshal ProviderTokens: %w", err)
+	}
+
+	err = b.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("ProviderTokens"))
+		if bucket == nil {
+			return fmt.Errorf("ProviderTokens bucket does not exist")
+		}
+		return bucket.Put([]byte(userID), data)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to store provider tokens: %w", err)
+	}
+
+	return nil
+}
+
+// GetProviderTokens retrieves the provider's tokens for a user.
+func (b *BoltDB) GetProviderTokens(userID string) (auth.ProviderTokens, error) {
+	var tokens auth.ProviderTokens
+
+	err := b.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("ProviderTokens"))
+		if bucket == nil {
+			return fmt.Errorf("ProviderTokens bucket does not exist")
+		}
+		val := bucket.Get([]byte(userID))
+		if val == nil {
+			return fmt.Errorf("provider tokens not found for userID %s", userID)
+		}
+		return json.Unmarshal(val, &tokens)
+	})
+	if err != nil {
+		return tokens, err
+	}
+
+	return tokens, nil
+}
+
+// UpdateProviderTokens updates the provider's tokens for a user.
+func (b *BoltDB) UpdateProviderTokens(userID string, tokens auth.ProviderTokens) error {
+	// Since we're overwriting the tokens, it's the same as storing them
+	return b.StoreProviderTokens(userID, tokens)
 }

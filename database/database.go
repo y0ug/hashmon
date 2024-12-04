@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/y0ug/hashmon/models"
+	"github.com/y0ug/hashmon/pkg/auth"
 )
 
 // Database defines the methods required for hash storage and retrieval.
@@ -51,6 +52,10 @@ type Database interface {
 
 	// RevokeRefreshToken removes a refresh token from the database.
 	RevokeRefreshToken(token string) error
+
+	StoreProviderTokens(userID string, tokens auth.ProviderTokens) error
+	GetProviderTokens(userID string) (auth.ProviderTokens, error)
+	UpdateProviderTokens(userID string, tokens auth.ProviderTokens) error
 }
 
 // Custom errors

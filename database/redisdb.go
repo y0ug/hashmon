@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	"github.com/y0ug/hashmon/models"
+	"github.com/y0ug/hashmon/pkg/auth"
 )
 
 // RedisDB implements the Database interface using Redis.
@@ -267,4 +268,63 @@ func (r *RedisDB) RevokeRefreshToken(token string) error {
 	// Define the key for the refresh token
 	key := fmt.Sprintf("refresh_token:%s", token)
 	return r.client.Del(r.ctx, key).Err()
+}
+
+func (r *RedisDB) StoreProviderRefreshToken(userID, refreshToken string) error {
+	key := fmt.Sprintf("provider_refresh_token:%s", userID)
+	return r.client.Set(r.ctx, key, refreshToken, 0).Err() // 0 means no expiration
+}
+
+func (r *RedisDB) GetProviderRefreshToken(userID string) (string, error) {
+	key := fmt.Sprintf("provider_refresh_token:%s", userID)
+	val, err := r.client.Get(r.ctx, key).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return "", fmt.Errorf("refresh token not found for userID %s", userID)
+		}
+		return "", err
+	}
+	return val, nil
+}
+
+// StoreProviderTokens stores the provider's tokens for a user.
+func (r *RedisDB) StoreProviderTokens(userID string, tokens auth.ProviderTokens) error {
+	key := fmt.Sprintf("provider_tokens:%s", userID)
+	encoded, err := json.Marshal(tokens)
+	if err != nil {
+		return fmt.Errorf("failed to marshal ProviderTokens: %w", err)
+	}
+	// Optionally, set an expiration based on tokens.ExpiresAt
+	ttl := time.Until(tokens.ExpiresAt)
+	if ttl <= 0 {
+		return fmt.Errorf("invalid expiration time for provider tokens")
+	}
+	return r.client.Set(r.ctx, key, encoded, ttl).Err()
+}
+
+// GetProviderTokens retrieves the provider's tokens for a user.
+func (r *RedisDB) GetProviderTokens(userID string) (auth.ProviderTokens, error) {
+	var tokens auth.ProviderTokens
+
+	key := fmt.Sprintf("provider_tokens:%s", userID)
+	val, err := r.client.Get(r.ctx, key).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return tokens, fmt.Errorf("provider tokens not found for userID %s", userID)
+		}
+		return tokens, err
+	}
+
+	err = json.Unmarshal([]byte(val), &tokens)
+	if err != nil {
+		return tokens, fmt.Errorf("failed to unmarshal ProviderTokens: %w", err)
+	}
+
+	return tokens, nil
+}
+
+// UpdateProviderTokens updates the provider's tokens for a user.
+func (r *RedisDB) UpdateProviderTokens(userID string, tokens auth.ProviderTokens) error {
+	// Overwrite the existing tokens with the new ones
+	return r.StoreProviderTokens(userID, tokens)
 }
