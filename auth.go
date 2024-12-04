@@ -156,7 +156,7 @@ func (ws *WebServer) handleCallback(w http.ResponseWriter, r *http.Request) {
 
 	accessCookie := &http.Cookie{
 		Name:     "access_token",
-		Value:    token.AccessToken,
+		Value:    tokens.AccessToken,
 		Expires:  expirationTime,
 		HttpOnly: true,                 // Prevents JavaScript access
 		Secure:   false,                // Ensures the cookie is sent over HTTPS
@@ -425,7 +425,7 @@ func (ws *WebServer) handleLogout(w http.ResponseWriter, r *http.Request) {
 		Expires:  time.Unix(0, 0),
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   false,
 		Path:     "/",
 		SameSite: http.SameSiteLaxMode,
 	}
@@ -438,7 +438,7 @@ func (ws *WebServer) handleLogout(w http.ResponseWriter, r *http.Request) {
 		Expires:  time.Unix(0, 0),
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   false,
 		Path:     "/auth/refresh",
 		SameSite: http.SameSiteLaxMode,
 	}
@@ -546,7 +546,7 @@ func (ws *WebServer) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		Value:    newAccessToken,
 		Expires:  accessExpirationTime,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   false,
 		Path:     "/",
 		SameSite: http.SameSiteLaxMode,
 	}
@@ -558,7 +558,7 @@ func (ws *WebServer) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		Value:    newRefreshToken,
 		Expires:  time.Now().Add(7 * 24 * time.Hour),
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   false,
 		Path:     "/auth/refresh",
 		SameSite: http.SameSiteLaxMode,
 	}
