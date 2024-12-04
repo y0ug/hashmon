@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
+	"github.com/sirupsen/logrus"
 	"github.com/y0ug/hashmon/config"
 	"github.com/y0ug/hashmon/models"
 	"github.com/y0ug/hashmon/pkg/auth"
@@ -19,6 +19,7 @@ type WebServer struct {
 	config      *config.WebserverConfig
 	authConfig  *auth.Config
 	authHandler *auth.Handler
+	Logger      *logrus.Logger // Added Logger field
 }
 
 // StartWebServer starts the HTTP server.
@@ -46,22 +47,24 @@ func StartWebServer(ctx context.Context, ws *WebServer) (*http.Server, error) {
 
 	// Start the server in a separate goroutine
 	go func() {
+		ws.Logger.Infof("Server starting on %s", ws.config.ListenTo)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fmt.Printf("ListenAndServe(): %v", err)
+			ws.Logger.Errorf("ListenAndServe(): %v", err)
 		}
 	}()
 
-	fmt.Printf("Server started on %s\n", ws.config.ListenTo)
+	ws.Logger.Infof("Server started on %s", ws.config.ListenTo)
 	return server, nil
 }
 
 // NewWebServer initializes a new WebServer.
-func NewWebServer(monitor *Monitor, config *config.WebserverConfig, authConfig *auth.Config, authHandler *auth.Handler) *WebServer {
+func NewWebServer(monitor *Monitor, config *config.WebserverConfig, authConfig *auth.Config, authHandler *auth.Handler, logger *logrus.Logger) *WebServer {
 	return &WebServer{
 		Monitor:     monitor,
 		config:      config,
 		authConfig:  authConfig,
 		authHandler: authHandler,
+		Logger:      logger,
 	}
 }
 
@@ -104,8 +107,7 @@ func (ws *WebServer) handleGetHashes(w http.ResponseWriter, r *http.Request) {
 		Hashes: hashes,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	auth.WriteSuccessResponse(w, "Hashes retrieved successfully", response)
 }
 
 // handleGetHashDetail handles the GET /hashes/{sha256} endpoint.
@@ -114,7 +116,8 @@ func (ws *WebServer) handleGetHashDetail(w http.ResponseWriter, r *http.Request)
 	sha256 := vars["sha256"]
 	hashStatus, err := ws.Monitor.GetHashStatus(sha256)
 	if err != nil {
-		http.Error(w, "Hash not found", http.StatusNotFound)
+		ws.Logger.Errorf("Failed to get hash status for %s: %v", sha256, err)
+		auth.WriteErrorResponse(w, "Hash not found", http.StatusNotFound)
 		return
 	}
 
@@ -122,8 +125,7 @@ func (ws *WebServer) handleGetHashDetail(w http.ResponseWriter, r *http.Request)
 		Hash: hashStatus,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	auth.WriteSuccessResponse(w, "Hash detail retrieved successfully", response)
 }
 
 // handleAddHash handles the PUT /hashes endpoint.
@@ -131,30 +133,38 @@ func (ws *WebServer) handleAddHash(w http.ResponseWriter, r *http.Request) {
 	var newHash models.HashRecord
 
 	// Decode the JSON payload
-	err := json.NewDecoder(r.Body).Decode(&newHash)
+	err := r.ParseForm()
 	if err != nil {
-		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		ws.Logger.Errorf("Error parsing form: %v", err)
+		auth.WriteErrorResponse(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	err = json.NewDecoder(r.Body).Decode(&newHash)
+	if err != nil {
+		ws.Logger.Errorf("Invalid JSON payload: %v", err)
+		auth.WriteErrorResponse(w, "Invalid JSON payload", http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
 
 	// Basic validation
 	if newHash.SHA256 == "" {
-		http.Error(w, "SHA256 field is required", http.StatusBadRequest)
+		ws.Logger.Warn("SHA256 field is required")
+		auth.WriteErrorResponse(w, "SHA256 field is required", http.StatusBadRequest)
 		return
 	}
 
 	// Add the new hash to the monitor
 	err = ws.Monitor.AddHash(newHash)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to add hash: %v", err), http.StatusInternalServerError)
+		ws.Logger.Errorf("Failed to add hash: %v", err)
+		auth.WriteErrorResponse(w, "Failed to add hash", http.StatusInternalServerError)
 		return
 	}
 
 	// Respond with the created hash
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(newHash)
+	auth.WriteSuccessResponse(w, "Hash added successfully", newHash)
 }
 
 // handleDeleteHash handles the DELETE /hashes/{sha256} endpoint.
@@ -162,14 +172,16 @@ func (ws *WebServer) handleDeleteHash(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	sha256, exists := vars["sha256"]
 	if !exists || sha256 == "" {
-		http.Error(w, "SHA256 parameter is required", http.StatusBadRequest)
+		ws.Logger.Warn("SHA256 parameter is required")
+		auth.WriteErrorResponse(w, "SHA256 parameter is required", http.StatusBadRequest)
 		return
 	}
 
 	// Delete the hash from the monitor
 	err := ws.Monitor.Config.Database.DeleteHash(sha256)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to delete hash: %v", err), http.StatusInternalServerError)
+		ws.Logger.Errorf("Failed to delete hash %s: %v", sha256, err)
+		auth.WriteErrorResponse(w, "Failed to delete hash", http.StatusInternalServerError)
 		return
 	}
 

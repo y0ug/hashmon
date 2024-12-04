@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -25,12 +26,6 @@ func generateStateString() string {
 		panic(err) // Handle error appropriately in production
 	}
 	return base64.URLEncoding.EncodeToString(b)
-}
-
-// validateState validates the state parameter to prevent CSRF attacks.
-func validateState(state string) bool {
-	// Implement state validation using sessions or secure storage
-	return true
 }
 
 // generateTokens creates both access and refresh JWT tokens.
@@ -74,35 +69,6 @@ func generateTokens(claims jwt.MapClaims, config *Config) (*TokenResponse, error
 		TokenType:    "Bearer",
 		ExpiresIn:    int64(time.Until(accessExpirationTime).Seconds()),
 	}, nil
-}
-
-// generateAccessToken creates a new access JWT token.
-func generateAccessToken(claims jwt.MapClaims, config *Config) (string, error) {
-	accessExpirationTime := time.Now().Add(config.AccessTokenExpiration)
-	accessClaims := jwt.MapClaims{
-		"sub":   claims["sub"],
-		"name":  claims["name"],
-		"email": claims["email"],
-		"exp":   accessExpirationTime.Unix(),
-		"iat":   time.Now().Unix(),
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, accessClaims)
-	return token.SignedString(config.JwtSecret)
-}
-
-// generateRefreshToken creates a new refresh JWT token.
-func generateRefreshToken(claims jwt.MapClaims, config *Config) (string, error) {
-	refreshExpirationTime := time.Now().Add(config.RefreshTokenExpiration)
-	refreshClaims := jwt.MapClaims{
-		"sub":  claims["sub"],
-		"exp":  refreshExpirationTime.Unix(),
-		"iat":  time.Now().Unix(),
-		"type": "refresh",
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshClaims)
-	return token.SignedString(config.JwtSecret)
 }
 
 // decodeIDToken decodes and validates the ID token.
@@ -175,9 +141,9 @@ func setAuthCookies(w http.ResponseWriter, tokens *TokenResponse, config *Config
 		Value:    tokens.AccessToken,
 		Expires:  accessExpirationTime,
 		HttpOnly: true,
-		Secure:   false,                // Adjust based on your needs
-		Path:     "/",                  // Cookie is valid for all paths
-		SameSite: http.SameSiteLaxMode, // Adjust based on your needs
+		Secure:   config.SecureCookie,
+		Path:     "/",                   // Cookie is valid for all paths
+		SameSite: config.CookieSameSite, // Adjust based on your needs
 	}
 
 	// Set the access token cookie
@@ -189,15 +155,44 @@ func setAuthCookies(w http.ResponseWriter, tokens *TokenResponse, config *Config
 		Value:    tokens.RefreshToken,
 		Expires:  refreshExpirationTime,
 		HttpOnly: true,
-		Secure:   false, // Adjust based on your needs
+		Secure:   config.SecureCookie,
 		Path:     "/auth/refresh",
-		SameSite: http.SameSiteLaxMode, // Adjust based on your needs
+		SameSite: config.CookieSameSite, // Adjust based on your needs
 	}
 	http.SetCookie(w, refreshCookie)
 }
 
+// clearAuthCookies removes the authentication cookies.
+func clearAuthCookies(w http.ResponseWriter, config *Config) {
+	// Remove the access token cookie
+	expiredAccessCookie := &http.Cookie{
+		Name:     "access_token",
+		Value:    "",
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   config.SecureCookie,
+		Path:     "/",
+		SameSite: config.CookieSameSite,
+	}
+	http.SetCookie(w, expiredAccessCookie)
+
+	// Remove the refresh token cookie
+	expiredRefreshCookie := &http.Cookie{
+		Name:     "refresh_token",
+		Value:    "",
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   config.SecureCookie,
+		Path:     "/auth/refresh",
+		SameSite: config.CookieSameSite,
+	}
+	http.SetCookie(w, expiredRefreshCookie)
+}
+
 // Get user info from the OAuth provider
-func (h *Handler) getUserInfo(accessToken string) (*UserInfo, error) {
+func (h *Handler) defaultGetUserInfo(accessToken string) (*UserInfo, error) {
 	req, err := http.NewRequest("GET", h.Config.OauthUserInfoURL, nil)
 	if err != nil {
 		return nil, err
@@ -227,7 +222,7 @@ func (h *Handler) getUserInfo(accessToken string) (*UserInfo, error) {
 }
 
 // Refresh the access token using the refresh token for the oauth2 provider
-func (h *Handler) exchangeProviderRefreshToken(refreshToken string) (*oauth2.Token, error) {
+func (h *Handler) defaultExchangeProviderRefreshToken(refreshToken string) (*oauth2.Token, error) {
 	tokenSource := h.Config.OAuth2Config.TokenSource(context.Background(), &oauth2.Token{
 		RefreshToken: refreshToken,
 	})
@@ -251,11 +246,6 @@ func (h *Handler) buildEndSessionURL(r *http.Request) (string, error) {
 	// Add the required parameters
 	params := url.Values{}
 	params.Add("post_logout_redirect_uri", h.Config.PostLogoutRedirectURI)
-	// If using ID token hints, include the ID token
-	// idToken, err := h.getIDTokenFromCookie(r)
-	// if err == nil {
-	//     params.Add("id_token_hint", idToken)
-	// }
 
 	u.RawQuery = params.Encode()
 	return u.String(), nil
@@ -310,4 +300,65 @@ func parseSameSite(s string) (http.SameSite, error) {
 	default:
 		return http.SameSiteDefaultMode, fmt.Errorf("invalid SameSite value: '%s'", s)
 	}
+}
+
+func getClientIP(r *http.Request) string {
+	// Look for X-Forwarded-For header
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff != "" {
+		// X-Forwarded-For can have multiple IPs; the first one is usually the original client IP
+		ips := strings.Split(xff, ",")
+		return strings.TrimSpace(ips[0])
+	}
+
+	// Fallback to RemoteAddr if X-Forwarded-For is not set
+	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	return clientIP
+}
+
+func WriteJSONResponse(w http.ResponseWriter, httpStatus int, data *HttpResp) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(httpStatus)
+
+	json.NewEncoder(w).Encode(data)
+}
+
+func WriteSuccessResponse(w http.ResponseWriter, message string, data interface{}) {
+	WriteJSONResponse(w,
+		http.StatusOK,
+		&HttpResp{Status: "success", Data: data, Message: message})
+}
+
+func WriteErrorResponse(w http.ResponseWriter, message string, httpStatus int) {
+	WriteJSONResponse(w,
+		httpStatus,
+		&HttpResp{Status: "error", Data: nil, Message: message})
+}
+
+func WriteErrorResponseData(w http.ResponseWriter, message string, data interface{}, httpStatus int) {
+	WriteJSONResponse(w,
+		httpStatus,
+		&HttpResp{Status: "error", Data: data, Message: message})
+}
+
+// extractToken extracts a token from the request headers or cookies.
+func extractToken(r *http.Request, tokenName string) string {
+	// Check the Authorization header for a Bearer token
+	if tokenName == "access_token" {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader != "" {
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
+				return parts[1]
+			}
+		}
+	}
+
+	// Check for token in the cookie
+	cookie, err := r.Cookie(tokenName)
+	if err == nil {
+		return cookie.Value
+	}
+
+	return ""
 }

@@ -2,57 +2,41 @@ package auth
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/oauth2"
 )
-
-// TokenResponse represents the structure of token response.
-type TokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	TokenType    string `json:"token_type"`
-	ExpiresIn    int64  `json:"expires_in"`
-}
-
-// LogoutResponse defines the structure of the logout response.
-type LogoutResponse struct {
-	Message string `json:"message"`
-}
-
-// UserInfo represents the authenticated user's information.
-type UserInfo struct {
-	Sub   string `json:"sub"`
-	Name  string `json:"name"`
-	Email string `json:"email"`
-}
-
-// StatusResponse defines the structure of the /status response.
-type StatusResponse struct {
-	Authenticated bool     `json:"authenticated"`
-	User          UserInfo `json:"user,omitempty"`
-	Message       string   `json:"message,omitempty"`
-}
 
 // Handler holds the authentication handlers and dependencies.
 type Handler struct {
 	Config     *Config
 	Database   Database
 	Middleware *Middleware
+	Logger     *logrus.Logger // Added Logger field
+
+	// Function fields for methods we want to mock
+	getUserInfoFunc                  func(string) (*UserInfo, error)
+	exchangeProviderRefreshTokenFunc func(string) (*oauth2.Token, error)
 }
 
 // NewHandler initializes a new authentication handler.
-func NewHandler(config *Config, db Database) *Handler {
-	return &Handler{
+func NewHandler(config *Config, db Database, logger *logrus.Logger) *Handler {
+	h := &Handler{
 		Config:     config,
 		Database:   db,
-		Middleware: NewMiddleware(config, db),
+		Middleware: NewMiddleware(config, db, logger),
+		Logger:     logger,
 	}
+
+	// Initialize function fields with default methods
+	h.getUserInfoFunc = h.defaultGetUserInfo
+	h.exchangeProviderRefreshTokenFunc = h.defaultExchangeProviderRefreshToken
+
+	return h
 }
 
 // AuthMiddleware returns the authentication middleware.
@@ -62,57 +46,64 @@ func (h *Handler) AuthMiddleware(next http.Handler) http.Handler {
 
 // HandleLogin handles the login endpoint.
 func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
+	h.Logger.Debug("HandleLogin invoked")
+
 	state := generateStateString()
+	h.Logger.Debugf("Generated state: %s", state)
 	// TODO: Store 'state' in session for later validation
 
 	url := h.Config.OAuth2Config.AuthCodeURL(state)
+	h.Logger.Info("Redirecting user to OAuth provider for login")
+
 	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
+	// WriteSuccessResponse(w, "Redirecting to OAuth provider", map[string]string{"url": url})
 }
 
 // HandleCallback handles the OAuth2 callback and exchanges the code for tokens.
 func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
+	h.Logger.Debug("HandleCallback invoked")
+
 	// Extract the authorization code from the query parameters
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		http.Error(w, "Code not found in the request", http.StatusBadRequest)
+		h.Logger.Warn("Authorization code not found in the request")
+		WriteErrorResponse(w, "Code not found in the request", http.StatusBadRequest)
 		return
 	}
+
+	h.Logger.Debugf("Authorization code received: %s", code)
 
 	// Exchange the code for tokens
 	token, err := h.Config.OAuth2Config.Exchange(context.Background(), code)
 	if err != nil {
-		logrus.WithError(err).Error("Token exchange failed")
-		http.Error(w, "Failed to exchange token", http.StatusInternalServerError)
+		h.Logger.WithError(err).Error("Token exchange failed")
+		WriteErrorResponse(w, "Failed to exchange token", http.StatusInternalServerError)
 		return
 	}
 
-	logrus.WithField("token", token).Debug("Token exchange successful")
-
-	// Check if the refresh token is present
-	if token.RefreshToken == "" {
-		logrus.Warn("No refresh token received from the provider")
-		// Depending on your application's requirements, decide how to handle this
-		// For example, you might prompt the user to re-authenticate with the necessary scopes
-	}
+	h.Logger.WithField("token", token).Debug("Token exchange successful")
 
 	// Extract user info from the ID token or access token
 	idToken, ok := token.Extra("id_token").(string)
 	if !ok {
-		http.Error(w, "Failed to extract ID token", http.StatusInternalServerError)
+		h.Logger.Warn("ID token extraction failed")
+		WriteErrorResponse(w, "Failed to extract ID token", http.StatusInternalServerError)
 		return
 	}
-	logrus.WithField("id_token", idToken).Debug("id_token")
+	h.Logger.WithField("id_token", idToken).Debug("ID token extracted")
 
 	userClaims, err := decodeIDToken(idToken, h.Config)
 	if err != nil {
-		fmt.Printf("Failed to decode ID token: %v\n", err)
-		http.Error(w, "Failed to decode ID token", http.StatusInternalServerError)
+		h.Logger.WithError(err).Error("Failed to decode ID token")
+		WriteErrorResponse(w, "Failed to decode ID token", http.StatusInternalServerError)
 		return
 	}
 
 	userID := userClaims["sub"].(string)
 	userName := userClaims["name"].(string)
 	userEmail := userClaims["email"].(string)
+
+	h.Logger.Infof("User authenticated: %s (%s)", userName, userEmail)
 
 	// Create ProviderTokens struct
 	providerTokens := ProviderTokens{
@@ -124,57 +115,47 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	// Store ProviderTokens in the database
 	err = h.Database.StoreProviderTokens(userID, providerTokens)
 	if err != nil {
-		logrus.WithError(err).Error("Failed to store provider tokens")
-		http.Error(w, "Failed to store tokens", http.StatusInternalServerError)
+		h.Logger.WithError(err).Error("Failed to store provider tokens")
+		WriteErrorResponse(w, "Failed to store tokens", http.StatusInternalServerError)
 		return
 	}
+
+	h.Logger.Debug("Provider tokens stored successfully")
 
 	// Generate your application's tokens (if applicable)
 	claimsMap := jwt.MapClaims{
 		"sub":   userID,
 		"name":  userName,
 		"email": userEmail,
-		"exp":   time.Now().Add(15 * time.Minute).Unix(),
-		"iat":   time.Now().Unix(),
 	}
 
-	// Generate your application's access token
-	newAccessToken, err := generateAccessToken(claimsMap, h.Config)
+	// Generate tokens
+	tokens, err := generateTokens(claimsMap, h.Config)
 	if err != nil {
-		http.Error(w, "Failed to generate access token", http.StatusInternalServerError)
+		h.Logger.WithError(err).Error("Failed to generate tokens")
+		WriteErrorResponse(w, "Failed to generate tokens", http.StatusInternalServerError)
 		return
 	}
 
-	// Generate your application's refresh token
-	newRefreshToken, err := generateRefreshToken(claimsMap, h.Config)
-	if err != nil {
-		http.Error(w, "Failed to generate refresh token", http.StatusInternalServerError)
-		return
-	}
+	h.Logger.Debugf("Generated tokens: %+v", tokens)
 
 	// Store your application's refresh token with expiration from config
-	err = h.Database.StoreRefreshToken(newRefreshToken, userID, time.Now().Add(h.Config.RefreshTokenExpiration))
+	err = h.Database.StoreRefreshToken(tokens.RefreshToken, userID, time.Now().Add(h.Config.RefreshTokenExpiration))
 	if err != nil {
-		http.Error(w, "Failed to store refresh token", http.StatusInternalServerError)
+		h.Logger.WithError(err).Error("Failed to store refresh token")
+		WriteErrorResponse(w, "Failed to store refresh token", http.StatusInternalServerError)
 		return
 	}
 
-	// Revoke the old refresh token if implementing refresh token rotation
-	// h.Database.RevokeRefreshToken(oldRefreshToken)
+	h.Logger.Debug("Refresh token stored successfully")
 
-	// Set tokens in cookies or respond with tokens
-	tokens := &TokenResponse{
-		AccessToken:  newAccessToken,
-		RefreshToken: newRefreshToken,
-		TokenType:    "Bearer",
-		ExpiresIn:    int64(time.Until(time.Now().Add(h.Config.AccessTokenExpiration)).Seconds()),
-	}
-
+	// Set tokens in cookies
 	setAuthCookies(w, tokens, h.Config)
+	h.Logger.Debug("Auth cookies set")
 
-	// Optionally, respond with tokens in the response body
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(tokens)
+	// Respond with tokens in the response body
+	WriteSuccessResponse(w, "Token exchange successful", tokens)
+	h.Logger.Info("User logged in successfully")
 }
 
 // HandleStatus checks authentication status and returns user info.
@@ -182,11 +163,7 @@ func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	// Retrieve user claims from context (set by AuthMiddleware)
 	claims, ok := r.Context().Value("user").(jwt.MapClaims)
 	if !ok || claims == nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(StatusResponse{
-			Authenticated: false,
-			Message:       "Failed to retrieve user information",
-		})
+		WriteErrorResponse(w, "Failed to retrieve user information", http.StatusInternalServerError)
 		return
 	}
 
@@ -198,8 +175,7 @@ func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Respond with authenticated status and user info
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(StatusResponse{
+	WriteSuccessResponse(w, "Authenticated", StatusResponse{
 		Authenticated: true,
 		User:          user,
 	})
@@ -207,36 +183,147 @@ func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 
 // HandleLogout logs the user out by removing the JWT cookie and blacklisting the token.
 func (h *Handler) HandleLogout(w http.ResponseWriter, r *http.Request) {
+	h.Logger.Debug("HandleLogout invoked")
+
 	var accessTokenString, refreshTokenString string
 
-	// Extract access token from Authorization header or cookie
-	authHeader := r.Header.Get("Authorization")
-	if authHeader != "" {
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
-			accessTokenString = parts[1]
-		}
-	}
-	if accessTokenString == "" {
-		cookie, err := r.Cookie("access_token")
-		if err == nil {
-			accessTokenString = cookie.Value
-		}
-	}
+	// Extract access token
+	accessTokenString = extractToken(r, "access_token")
+	h.Logger.Debugf("Access token extracted: %s", accessTokenString)
 
 	// Extract refresh token from cookie
-	cookie, err := r.Cookie("refresh_token")
-	if err == nil {
-		refreshTokenString = cookie.Value
+	refreshTokenString = extractToken(r, "refresh_token")
+	h.Logger.Debugf("Refresh token extracted: %s", refreshTokenString)
+
+	// Revoke tokens
+	if err := h.revokeTokens(accessTokenString, refreshTokenString); err != nil {
+		h.Logger.WithError(err).Error("Failed to revoke tokens during logout")
+		WriteErrorResponse(w, "Failed to logout", http.StatusInternalServerError)
+		return
 	}
 
+	h.Logger.Info("User logged out successfully")
+
+	// Remove the cookies
+	clearAuthCookies(w, h.Config)
+	h.Logger.Debug("Auth cookies cleared")
+
+	// Build the end-session URL
+	if h.Config.OauthEndSessionURL != "" {
+		endSessionURL, err := h.buildEndSessionURL(r)
+		if err != nil {
+			h.Logger.WithError(err).Error("Failed to build end session URL")
+			WriteErrorResponse(w, "Failed to logout", http.StatusInternalServerError)
+			return
+		}
+
+		h.Logger.Infof("Redirecting user to end session URL: %s", endSessionURL)
+		WriteSuccessResponse(w, "Redirecting to end-session URL", map[string]string{"url": endSessionURL})
+		return
+	}
+
+	// Respond to the client
+	WriteSuccessResponse(w, "Successfully logged out", nil)
+}
+
+// HandleRefresh handles token refresh.
+func (h *Handler) HandleRefresh(w http.ResponseWriter, r *http.Request) {
+	h.Logger.Debug("HandleRefresh invoked")
+
+	// Extract refresh token
+	refreshTokenString := extractToken(r, "refresh_token")
+	h.Logger.Debugf("Refresh token extracted: %s", refreshTokenString)
+
+	if refreshTokenString == "" {
+		h.Logger.Warn("Refresh token not found in the request")
+		WriteErrorResponse(w, "Refresh token not found", http.StatusUnauthorized)
+		return
+	}
+
+	// Validate application's refresh token locally
+	userID, err := h.Database.ValidateRefreshToken(refreshTokenString)
+	if err != nil {
+		h.Logger.WithError(err).Warn("Invalid or expired refresh token")
+		WriteErrorResponse(w, "Invalid or expired refresh token", http.StatusUnauthorized)
+		return
+	}
+
+	h.Logger.Infof("Refresh token validated for user ID: %s", userID)
+
+	// Retrieve the provider's tokens from the database
+	providerTokens, err := h.Database.GetProviderTokens(userID)
+	if err != nil {
+		h.Logger.WithError(err).Error("Failed to retrieve provider tokens")
+		WriteErrorResponse(w, "Failed to retrieve provider tokens", http.StatusInternalServerError)
+		return
+	}
+
+	h.Logger.Debugf("Provider tokens retrieved: %+v", providerTokens)
+
+	// Refresh provider tokens if needed
+	if err := h.refreshProviderTokens(userID, &providerTokens); err != nil {
+		h.Logger.WithError(err).Warn("Unable to refresh provider tokens")
+		h.Database.RevokeRefreshToken(refreshTokenString)
+		WriteErrorResponse(w, "Unable to refresh session, please log in again", http.StatusUnauthorized)
+		return
+	}
+
+	h.Logger.Debug("Provider tokens refreshed successfully")
+
+	// Use the access token to get the user's info
+	userInfo, err := h.getUserInfoFunc(providerTokens.AccessToken)
+	if err != nil {
+		h.Logger.WithError(err).Error("Failed to retrieve user info")
+		WriteErrorResponse(w, "Failed to retrieve user info", http.StatusUnauthorized)
+		return
+	}
+
+	h.Logger.Infof("User info retrieved: %s (%s)", userInfo.Name, userInfo.Email)
+
+	// Update claims
+	claims := jwt.MapClaims{
+		"sub":   userInfo.Sub,
+		"name":  userInfo.Name,
+		"email": userInfo.Email,
+	}
+
+	// Generate new tokens
+	tokens, err := generateTokens(claims, h.Config)
+	if err != nil {
+		h.Logger.WithError(err).Error("Failed to generate new tokens")
+		WriteErrorResponse(w, "Failed to generate tokens", http.StatusInternalServerError)
+		return
+	}
+
+	h.Logger.Debugf("New tokens generated: %+v", tokens)
+
+	// Store new refresh token and revoke the old one
+	err = h.Database.StoreRefreshToken(tokens.RefreshToken, userID, time.Now().Add(h.Config.RefreshTokenExpiration))
+	if err != nil {
+		h.Logger.WithError(err).Error("Failed to store new refresh token")
+		WriteErrorResponse(w, "Failed to store refresh token", http.StatusInternalServerError)
+		return
+	}
+	h.Database.RevokeRefreshToken(refreshTokenString)
+	h.Logger.Debug("Old refresh token revoked and new one stored")
+
+	// Set the new tokens in cookies
+	setAuthCookies(w, tokens, h.Config)
+	h.Logger.Debug("New auth cookies set")
+
+	// Respond with tokens in the response body
+	WriteSuccessResponse(w, "Token refreshed successfully", tokens)
+	h.Logger.Info("User tokens refreshed successfully")
+}
+
+// Helper methods for the Handler struct
+func (h *Handler) revokeTokens(accessTokenString, refreshTokenString string) error {
 	// Revoke access token if present
 	if accessTokenString != "" {
 		err := h.Database.AddBlacklistedToken(accessTokenString, getTokenExpiration(accessTokenString))
 		if err != nil {
 			logrus.WithError(err).Error("Failed to blacklist access token during logout")
-			http.Error(w, "Failed to logout", http.StatusInternalServerError)
-			return
+			return err
 		}
 	}
 
@@ -245,185 +332,36 @@ func (h *Handler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		err := h.Database.RevokeRefreshToken(refreshTokenString)
 		if err != nil {
 			logrus.WithError(err).Error("Failed to revoke refresh token during logout")
-			http.Error(w, "Failed to logout", http.StatusInternalServerError)
-			return
+			return err
 		}
 	}
 
-	// Remove the access token cookie
-	expiredAccessCookie := &http.Cookie{
-		Name:     "access_token",
-		Value:    "",
-		Expires:  time.Unix(0, 0),
-		MaxAge:   -1,
-		HttpOnly: true,
-		Secure:   h.Config.SecureCookie,
-		Path:     "/",
-		SameSite: h.Config.CookieSameSite,
-	}
-	http.SetCookie(w, expiredAccessCookie)
-
-	// Remove the refresh token cookie
-	expiredRefreshCookie := &http.Cookie{
-		Name:     "refresh_token",
-		Value:    "",
-		Expires:  time.Unix(0, 0),
-		MaxAge:   -1,
-		HttpOnly: true,
-		Secure:   h.Config.SecureCookie,
-		Path:     "/auth/refresh",
-		SameSite: h.Config.CookieSameSite,
-	}
-	http.SetCookie(w, expiredRefreshCookie)
-
-	// Build the end-session URL
-	if h.Config.OauthEndSessionURL != "" {
-		endSessionURL, err := h.buildEndSessionURL(r)
-		if err != nil {
-			logrus.WithError(err).Error("Failed to build end session URL")
-			http.Error(w, "Failed to logout", http.StatusInternalServerError)
-			return
-		}
-
-		// Redirect the user to the end-session endpoint
-		http.Redirect(w, r, endSessionURL, http.StatusFound)
-	}
-
-	// Respond to the client
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(LogoutResponse{
-		Message: "Successfully logged out",
-	})
+	return nil
 }
 
-// HandleRefresh handles token refresh.
-func (h *Handler) HandleRefresh(w http.ResponseWriter, r *http.Request) {
-	// Extract your application's refresh token from cookie
-	cookie, err := r.Cookie("refresh_token")
-	if err != nil {
-		http.Error(w, "Refresh token not found", http.StatusUnauthorized)
-		return
-	}
-	refreshTokenString := cookie.Value
-
-	// Validate application's refresh token locally
-	userID, err := h.Database.ValidateRefreshToken(refreshTokenString)
-	if err != nil {
-		http.Error(w, "Invalid or expired refresh token", http.StatusUnauthorized)
-		return
-	}
-
-	// Parse and validate the token to get the user info
-	token, err := jwt.Parse(refreshTokenString, func(token *jwt.Token) (interface{}, error) {
-		// Ensure token is signed with HS256
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return h.Config.JwtSecret, nil
-	})
-
-	if err != nil || !token.Valid {
-		logrus.WithError(err).Error("Invalid Refresh token")
-		http.Error(w, "Invalid refresh token", http.StatusUnauthorized)
-		return
-	}
-
-	// Validate token claims
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		http.Error(w, "Claim not available in refresh token", http.StatusUnauthorized)
-		http.Error(w, "Invalid refresh token", http.StatusUnauthorized)
-		return
-	}
-
-	// Retrieve the provider's tokens from the database
-	providerTokens, err := h.Database.GetProviderTokens(userID)
-	if err != nil {
-		http.Error(w, "Failed to retrieve provider tokens", http.StatusInternalServerError)
-		return
-	}
-
+func (h *Handler) refreshProviderTokens(userID string, providerTokens *ProviderTokens) error {
 	if providerTokens.RefreshToken != "" {
-		// logrus.Info("Provider refresh token found")
-
 		// Exchange the provider's refresh token for a new access token
-		newProviderTokens, err := h.exchangeProviderRefreshToken(providerTokens.RefreshToken)
+		newProviderTokens, err := h.exchangeProviderRefreshTokenFunc(providerTokens.RefreshToken)
 		if err != nil {
-			// Handle token exchange errors, possibly revoke the refresh token
-			h.Database.RevokeRefreshToken(refreshTokenString)
-			http.Error(w, "Unable to refresh session, please log in again", http.StatusUnauthorized)
-			return
+			return err
 		}
 
-		providerTokens = ProviderTokens{
+		*providerTokens = ProviderTokens{
 			AccessToken:  newProviderTokens.AccessToken,
 			RefreshToken: newProviderTokens.RefreshToken,
 			ExpiresAt:    newProviderTokens.Expiry,
 		}
 		// Update the provider's tokens in the database
-		err = h.Database.UpdateProviderTokens(userID, providerTokens)
+		err = h.Database.UpdateProviderTokens(userID, *providerTokens)
 		if err != nil {
-			http.Error(w, "Failed to update provider tokens", http.StatusInternalServerError)
-			return
+			return err
 		}
 	}
 
 	if providerTokens.ExpiresAt.Before(time.Now()) {
-		http.Error(w, "oauth2 provider access_token expired", http.StatusUnauthorized)
-		h.Database.RevokeRefreshToken(refreshTokenString)
-		// TODO: black list the access token
-		return
+		return fmt.Errorf("oauth2 provider access_token expired")
 	}
 
-	// Use the access token to get the user's info
-	userInfo, err := h.getUserInfo(providerTokens.AccessToken)
-	if err != nil {
-		logrus.WithError(err).Error("Failed to retrieve user info")
-		http.Error(w, "Failed to retrieve user info", http.StatusUnauthorized)
-		return
-	}
-
-	// Update claims
-	claims = jwt.MapClaims{
-		"sub":   userInfo.Sub,
-		"name":  userInfo.Name,
-		"email": userInfo.Email,
-		"exp":   time.Now().Add(h.Config.AccessTokenExpiration).Unix(),
-		"iat":   time.Now().Unix(),
-	}
-
-	// Generate your application's new access token
-	newAccessToken, err := generateAccessToken(claims, h.Config)
-	if err != nil {
-		http.Error(w, "Failed to generate access token", http.StatusInternalServerError)
-		return
-	}
-
-	// Generate your application's new refresh token
-	newRefreshToken, err := generateRefreshToken(claims, h.Config)
-	if err != nil {
-		http.Error(w, "Failed to generate refresh token", http.StatusInternalServerError)
-		return
-	}
-
-	// Store your application's new refresh token and revoke the old one
-	err = h.Database.StoreRefreshToken(newRefreshToken, userID, time.Now().Add(h.Config.RefreshTokenExpiration))
-	if err != nil {
-		http.Error(w, "Failed to store refresh token", http.StatusInternalServerError)
-		return
-	}
-	h.Database.RevokeRefreshToken(refreshTokenString)
-
-	// Set the new tokens in cookies or respond with tokens
-	tokens := &TokenResponse{
-		AccessToken:  newAccessToken,
-		RefreshToken: newRefreshToken,
-		TokenType:    "Bearer",
-		ExpiresIn:    int64(time.Until(time.Now().Add(h.Config.AccessTokenExpiration)).Seconds()),
-	}
-	setAuthCookies(w, tokens, h.Config)
-
-	// Optionally, respond with tokens in the response body
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(tokens)
+	return nil
 }

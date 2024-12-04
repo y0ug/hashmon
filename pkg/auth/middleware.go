@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
@@ -15,53 +14,44 @@ import (
 type Middleware struct {
 	Config   *Config
 	Database Database
+	Logger   *logrus.Logger // Added Logger field
 }
 
 // NewMiddleware initializes a new authentication middleware.
-func NewMiddleware(config *Config, db Database) *Middleware {
+func NewMiddleware(config *Config, db Database, logger *logrus.Logger) *Middleware {
 	return &Middleware{
 		Config:   config,
 		Database: db,
+		Logger:   logger, // Initialize Logger
 	}
 }
 
 // AuthMiddleware is the HTTP middleware for authentication.
 func (m *Middleware) AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var tokenString string
+		m.Logger.Debug("AuthMiddleware invoked")
 
-		// Check the Authorization header for a Bearer token
-		authHeader := r.Header.Get("Authorization")
-		if authHeader != "" {
-			parts := strings.SplitN(authHeader, " ", 2)
-			if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
-				tokenString = parts[1]
-			}
-		}
-
-		// If no Bearer token, check for JWT in the cookie
-		if tokenString == "" {
-			cookie, err := r.Cookie("access_token")
-			if err == nil {
-				tokenString = cookie.Value
-			}
-		}
+		// Extract access token
+		tokenString := extractToken(r, "access_token")
+		m.Logger.Debugf("Access token extracted: %s", tokenString)
 
 		// If no token found, reject the request
 		if tokenString == "" {
-			http.Error(w, "Authorization token not found", http.StatusUnauthorized)
+			m.Logger.Warn("Authorization token not found")
+			WriteErrorResponse(w, "Authorization token not found", http.StatusUnauthorized)
 			return
 		}
 
 		// Check if the token is blacklisted
 		blacklisted, err := m.Database.IsTokenBlacklisted(tokenString)
 		if err != nil {
-			logrus.WithError(err).Error("Failed to check token blacklist")
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			m.Logger.WithError(err).Error("Failed to check token blacklist")
+			WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 		if blacklisted {
-			http.Error(w, "Token has been revoked", http.StatusUnauthorized)
+			m.Logger.Warn("Token has been revoked")
+			WriteErrorResponse(w, "Token has been revoked", http.StatusUnauthorized)
 			return
 		}
 
@@ -75,8 +65,8 @@ func (m *Middleware) AuthMiddleware(next http.Handler) http.Handler {
 		})
 
 		if err != nil || !token.Valid {
-			logrus.WithError(err).Error("Invalid token")
-			http.Error(w, "Invalid token", http.StatusUnauthorized)
+			m.Logger.WithError(err).Warn("Invalid token")
+			WriteErrorResponse(w, "Invalid token", http.StatusUnauthorized)
 			return
 		}
 
@@ -84,9 +74,12 @@ func (m *Middleware) AuthMiddleware(next http.Handler) http.Handler {
 		if claims, ok := token.Claims.(jwt.MapClaims); ok {
 			// Validate expiration
 			if exp, ok := claims["exp"].(float64); !ok || float64(time.Now().Unix()) > exp {
-				http.Error(w, "Token has expired", http.StatusUnauthorized)
+				m.Logger.Warn("Token has expired")
+				WriteErrorResponse(w, "Token has expired", http.StatusUnauthorized)
 				return
 			}
+
+			m.Logger.Debug("Token validated successfully")
 
 			// Attach claims to the request context
 			ctx := context.WithValue(r.Context(), "user", claims)
@@ -94,6 +87,7 @@ func (m *Middleware) AuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		http.Error(w, "Invalid token claims", http.StatusUnauthorized)
+		m.Logger.Warn("Invalid token claims")
+		WriteErrorResponse(w, "Invalid token claims", http.StatusUnauthorized)
 	})
 }
