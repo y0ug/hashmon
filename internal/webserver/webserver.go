@@ -1,4 +1,4 @@
-package main
+package webserver
 
 import (
 	"context"
@@ -8,15 +8,15 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
 	"github.com/sirupsen/logrus"
-	"github.com/y0ug/hashmon/config"
-	"github.com/y0ug/hashmon/models"
+	"github.com/y0ug/hashmon/internal/database/models"
+	"github.com/y0ug/hashmon/internal/hashmon"
 	"github.com/y0ug/hashmon/pkg/auth"
 )
 
 // WebServer holds the data needed for handling HTTP requests.
 type WebServer struct {
-	Monitor     *Monitor
-	config      *config.WebserverConfig
+	Monitor     *hashmon.Monitor
+	config      *WebserverConfig
 	authConfig  *auth.Config
 	authHandler *auth.Handler
 	Logger      *logrus.Logger // Added Logger field
@@ -58,7 +58,7 @@ func StartWebServer(ctx context.Context, ws *WebServer) (*http.Server, error) {
 }
 
 // NewWebServer initializes a new WebServer.
-func NewWebServer(monitor *Monitor, config *config.WebserverConfig, authConfig *auth.Config, authHandler *auth.Handler, logger *logrus.Logger) *WebServer {
+func NewWebServer(monitor *hashmon.Monitor, config *WebserverConfig, authConfig *auth.Config, authHandler *auth.Handler, logger *logrus.Logger) *WebServer {
 	return &WebServer{
 		Monitor:     monitor,
 		config:      config,

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/y0ug/hashmon/models"
+	"github.com/y0ug/hashmon/internal/database/models"
 	"github.com/y0ug/hashmon/pkg/auth"
 )
 

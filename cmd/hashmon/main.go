@@ -9,10 +9,11 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
-	"github.com/y0ug/hashmon/apis"
-	"github.com/y0ug/hashmon/config"
-	"github.com/y0ug/hashmon/database" // Database abstraction
-	"github.com/y0ug/hashmon/notifications"
+	"github.com/y0ug/hashmon/internal/database"
+	"github.com/y0ug/hashmon/internal/hashmon"
+	"github.com/y0ug/hashmon/internal/hashmon/apis"
+	"github.com/y0ug/hashmon/internal/notifications"
+	"github.com/y0ug/hashmon/internal/webserver"
 	"github.com/y0ug/hashmon/pkg/auth"
 	"golang.org/x/time/rate"
 )
@@ -30,7 +31,7 @@ func main() {
 	flag.Parse()
 
 	// Load configuration
-	cfg, err := config.LoadConfig()
+	cfg, err := hashmon.LoadConfig()
 	if err != nil {
 		logger.Fatalf("Failed to load configuration: %v", err)
 	}
@@ -131,7 +132,7 @@ func main() {
 	logger.Info("Notifier initialized successfully")
 
 	// Initialize Monitor
-	monitorConfig := MonitorConfig{
+	monitorConfig := hashmon.MonitorConfig{
 		PollInterval:  cfg.PollInterval,
 		Notifier:      notifier,
 		APIClients:    apiClients,
@@ -139,7 +140,7 @@ func main() {
 		Database:      db,
 	}
 
-	monitor := NewMonitor(monitorConfig, 5) // maxConcurrency is 5
+	monitor := hashmon.NewMonitor(monitorConfig, 5) // maxConcurrency is 5
 
 	// Check if hashes exist in the database; if not, import from file
 	hashCount, err := func() (int, error) {
@@ -170,8 +171,13 @@ func main() {
 	}
 	logger.WithField("record_count", len(hashRecords)).Info("Hashes loaded successfully")
 
+	webServerConfig, err := webserver.NewWebserverConfig()
+	if err != nil {
+		logger.Fatalf("Failed to load webserver configuration: %v", err)
+	}
+
 	// Initialize Web Server
-	webServer := NewWebServer(monitor, cfg.WebserverConfig, authConfig, authHandler, logger)
+	webServer := webserver.NewWebServer(monitor, webServerConfig, authConfig, authHandler, logger)
 
 	// Create a cancellable context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -181,7 +187,7 @@ func main() {
 	serverErrors := make(chan error, 1)
 
 	// Start the web server
-	server, err := StartWebServer(ctx, webServer)
+	server, err := webserver.StartWebServer(ctx, webServer)
 	if err != nil {
 		logger.Fatalf("Failed to start web server: %v", err)
 	}

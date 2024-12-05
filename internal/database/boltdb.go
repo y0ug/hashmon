@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
-	"github.com/y0ug/hashmon/models"
+	"github.com/y0ug/hashmon/internal/database/models"
 	"github.com/y0ug/hashmon/pkg/auth"
 	"go.etcd.io/bbolt"
 )

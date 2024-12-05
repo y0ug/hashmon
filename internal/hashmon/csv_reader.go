@@ -1,4 +1,4 @@
-package main
+package hashmon
 
 import (
 	"encoding/csv"
@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/y0ug/hashmon/models"
+	"github.com/y0ug/hashmon/internal/database/models"
 )
 
 // ReadCSV reads the CSV file and returns a slice of HashRecords

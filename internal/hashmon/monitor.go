@@ -1,4 +1,4 @@
-package main
+package hashmon
 
 import (
 	"context"
@@ -6,10 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/y0ug/hashmon/apis"
-	"github.com/y0ug/hashmon/database"
-	"github.com/y0ug/hashmon/models"
-	"github.com/y0ug/hashmon/notifications"
+	"github.com/y0ug/hashmon/internal/database"
+	"github.com/y0ug/hashmon/internal/database/models"
+	"github.com/y0ug/hashmon/internal/hashmon/apis"
+	"github.com/y0ug/hashmon/internal/notifications"
 
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/semaphore"

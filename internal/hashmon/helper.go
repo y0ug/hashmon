@@ -1,10 +1,10 @@
-package main
+package hashmon
 
 import (
 	"path/filepath"
 	"strings"
 
-	"github.com/y0ug/hashmon/models"
+	"github.com/y0ug/hashmon/internal/database/models"
 )
 
 // ReadRecords reads hash records from a CSV or TXT file based on the file extension.

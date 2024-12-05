@@ -1,11 +1,11 @@
-package main
+package hashmon
 
 import (
 	"bufio"
 	"fmt"
 	"os"
 
-	"github.com/y0ug/hashmon/models"
+	"github.com/y0ug/hashmon/internal/database/models"
 )
 
 func ReadTxtFile(filePath string) ([]models.HashRecord, error) {

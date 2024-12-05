@@ -4,7 +4,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/y0ug/hashmon/models"
+	"github.com/y0ug/hashmon/internal/database/models"
 	"github.com/y0ug/hashmon/pkg/auth"
 )
 
