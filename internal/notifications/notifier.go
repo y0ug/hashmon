@@ -12,8 +12,8 @@ type Notifier struct {
 }
 
 // NewNotifier initializes a new Notifier with the provided Shoutrrr URLs.
-func NewNotifier(urls []string) (*Notifier, error) {
-	sr, err := router.New(nil, urls...)
+func NewNotifier(cfg *NotificationConfig) (*Notifier, error) {
+	sr, err := router.New(nil, cfg.ShoutrrrURLs...)
 	if err != nil {
 		return nil, err
 	}
@@ -28,6 +28,7 @@ func (n *Notifier) Send(title, message string) {
 	errors := n.sr.Send(message, &params)
 	for _, err := range errors {
 		if err != nil {
+			// TODO: better error handling
 			logrus.WithError(err).Error("Failed to send notification")
 		}
 	}

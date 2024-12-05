@@ -7,12 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/joho/godotenv"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
 )
 
-// Config holds the application configuration.
+// Config holds the hashmon-specific configuration.
 type Config struct {
 	InputFilePath    string
 	PollInterval     time.Duration
@@ -20,24 +19,21 @@ type Config struct {
 	VirusTotalAPIKey string
 	CuckooBaseURL    string
 	CuckooAPIKey     string
-	ShoutrrrURLs     []string
 	RateLimits       []RateLimitConfig
-	DatabaseType     string
-	DatabasePath     string
 }
 
+// RateLimitConfig defines rate limiting settings per API.
 type RateLimitConfig struct {
 	APIName string
 	Rate    rate.Limit // Requests per second
 	Burst   int        // Maximum burst size
 }
 
-// LoadConfig loads configuration from environment variables and .env file.
+// LoadConfig loads hashmon-specific configuration from environment variables.
 func LoadConfig() (*Config, error) {
-	// Load .env file if present
-	err := godotenv.Load()
-	if err != nil {
-		logrus.Info("No .env file found or error loading it. Proceeding with environment variables.")
+	inputFilePath := os.Getenv("INPUT_FILE_PATH")
+	if inputFilePath == "" {
+		return nil, fmt.Errorf("INPUT_FILE_PATH environment variable is required")
 	}
 
 	pollIntervalStr := os.Getenv("POLL_INTERVAL_MINUTES")
@@ -51,16 +47,9 @@ func LoadConfig() (*Config, error) {
 	checkInterval, err := strconv.Atoi(checkIntervalStr)
 	if err != nil || checkInterval <= 0 {
 		checkInterval = 60 // Default to 60 minutes
-		logrus.Infof("Invalid or missing CHECK_INTERVAL_MINUTES. Defaulting to %d minutes.", pollInterval)
+		logrus.Infof("Invalid or missing CHECK_INTERVAL_MINUTES. Defaulting to %d minutes.", checkInterval)
 	}
 
-	shoutrrrURLsStr := os.Getenv("SHOUTRRR_URLS")
-	if shoutrrrURLsStr == "" {
-		return nil, fmt.Errorf("SHOUTRRR_URLS environment variable is required")
-	}
-	shoutrrrURLs := parseShoutrrrURLs(shoutrrrURLsStr)
-
-	// Parse Rate Limits
 	rateLimitsStr := os.Getenv("RATE_LIMITS")
 	rateLimits, err := parseRateLimits(rateLimitsStr)
 	if err != nil {
@@ -68,38 +57,14 @@ func LoadConfig() (*Config, error) {
 	}
 
 	return &Config{
-		InputFilePath:    os.Getenv("INPUT_FILE_PATH"),
+		InputFilePath:    inputFilePath,
 		PollInterval:     time.Duration(pollInterval) * time.Minute,
 		CheckInterval:    time.Duration(checkInterval) * time.Minute,
 		VirusTotalAPIKey: os.Getenv("VT_API_KEY"),
 		CuckooBaseURL:    os.Getenv("CUCKOO_BASE_URL"),
 		CuckooAPIKey:     os.Getenv("CUCKOO_API_KEY"),
-		ShoutrrrURLs:     shoutrrrURLs,
 		RateLimits:       rateLimits,
-		DatabaseType:     os.Getenv("DATABASE_TYPE"),
-		DatabasePath:     os.Getenv("DATABASE_PATH"),
 	}, nil
-}
-
-// parseShoutrrrURLs parses a comma-separated list of Shoutrrr URLs.
-func parseShoutrrrURLs(urls string) []string {
-	var result []string
-	for _, url := range splitAndTrim(urls, ",") {
-		if url != "" {
-			result = append(result, url)
-		}
-	}
-	return result
-}
-
-// splitAndTrim splits a string by sep and trims spaces.
-func splitAndTrim(s, sep string) []string {
-	var result []string
-	for _, part := range strings.Split(s, sep) {
-		trimmed := strings.TrimSpace(part)
-		result = append(result, trimmed)
-	}
-	return result
 }
 
 // parseRateLimits parses rate limits from a comma-separated list of API:rate:burst.

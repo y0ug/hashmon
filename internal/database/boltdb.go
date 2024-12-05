@@ -21,15 +21,15 @@ type BoltDB struct {
 }
 
 // NewBoltDB initializes a new BoltDB instance.
-func NewBoltDB(path string) (*BoltDB, error) {
-	db, err := bbolt.Open(path, 0600, nil)
+func NewBoltDB(cfg *DatabaseConfig) (*BoltDB, error) {
+	db, err := bbolt.Open(cfg.Path, 0600, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	boltDB := &BoltDB{
 		db:   db,
-		path: path,
+		path: cfg.Path,
 	}
 
 	err = boltDB.Initialize()

@@ -18,11 +18,11 @@ type RedisDB struct {
 }
 
 // NewRedisDB initializes a new RedisDB instance.
-func NewRedisDB(addr, password string, db int) (*RedisDB, error) {
+func NewRedisDB(cfg *DatabaseConfig) (*RedisDB, error) {
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     addr,
-		Password: password, // no password set
-		DB:       db,       // use default DB
+		Addr:     cfg.RedisAddr,
+		Password: cfg.RedisPass, // no password set
+		DB:       cfg.RedisDB,   // use default DB
 	})
 
 	// Test connection
