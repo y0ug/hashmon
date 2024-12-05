@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -11,54 +12,51 @@ import (
 // Database defines the methods required for hash storage and retrieval.
 type Database interface {
 	// Initialize sets up the necessary buckets or tables.
-	Initialize() error
+	Initialize(ctx context.Context) error
 
-	Close() error
+	Close(ctx context.Context) error
 
 	// AddHash adds a new hash record.
-	AddHash(record models.HashRecord) error
+	AddHash(ctx context.Context, record models.HashRecord) error
 
 	// LoadHashes retrieves all hash records.
-	LoadHashes() ([]models.HashRecord, error)
+	LoadHashes(ctx context.Context) ([]models.HashRecord, error)
 
 	// UpdateHash updates an existing hash record.
-	UpdateHash(record models.HashRecord) error
+	UpdateHash(ctx context.Context, record models.HashRecord) error
 
 	// DeleteHash removes a hash record.
-	DeleteHash(sha256 string) error
+	DeleteHash(ctx context.Context, sha256 string) error
 
 	// GetHash retrieves a specific hash record.
-	GetHash(sha256 string) (models.HashRecord, error)
+	GetHash(ctx context.Context, sha256 string) (models.HashRecord, error)
 
 	// MarkAsAlerted marks a hash as alerted for a specific provider.
-	MarkAsAlerted(sha256, provider string) error
+	MarkAsAlerted(ctx context.Context, sha256, provider string) error
 
 	// IsAlerted checks if a hash has been alerted for a specific provider.
-	IsAlerted(sha256, provider string) (bool, error)
+	IsAlerted(ctx context.Context, sha256, provider string) (bool, error)
 
 	// AddBlacklistedToken adds a token string to the blacklist with its expiration time.
-	AddBlacklistedToken(tokenString string, exp int64) error
+	AddBlacklistedToken(ctx context.Context, tokenString string, exp int64) error
 
 	// IsTokenBlacklisted checks if a token is in the blacklist.
 	// If the token is expired, it removes it from the blacklist.
-	IsTokenBlacklisted(tokenString string) (bool, error)
+	IsTokenBlacklisted(ctx context.Context, tokenString string) (bool, error)
 
 	// StoreRefreshToken saves a refresh token with associated user and expiration.
-	StoreRefreshToken(token string, userID string, expiresAt time.Time) error
+	StoreRefreshToken(ctx context.Context, token string, userID string, expiresAt time.Time) error
 
 	// ValidateRefreshToken checks if a refresh token is valid and not expired.
 	// Returns the associated userID if valid.
-	ValidateRefreshToken(token string) (string, error)
+	ValidateRefreshToken(ctx context.Context, token string) (string, error)
 
 	// RevokeRefreshToken removes a refresh token from the database.
-	RevokeRefreshToken(token string) error
+	RevokeRefreshToken(ctx context.Context, token string) error
 
-	StoreProviderTokens(userID string, tokens auth.ProviderTokens) error
-	GetProviderTokens(userID string) (auth.ProviderTokens, error)
-	UpdateProviderTokens(userID string, tokens auth.ProviderTokens) error
+	StoreProviderTokens(ctx context.Context, userID string, provider string, tokens auth.ProviderTokens) error
+	GetProviderTokens(ctx context.Context, userID string, provider string) (auth.ProviderTokens, error)
+	UpdateProviderTokens(ctx context.Context, userID string, provider string, tokens auth.ProviderTokens) error
 }
 
-// Custom errors
-var (
-	ErrHashNotFound = errors.New("hash not found")
-)
+var ErrHashNotFound = errors.New("hash not found")

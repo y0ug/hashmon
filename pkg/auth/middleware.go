@@ -14,7 +14,7 @@ import (
 type Middleware struct {
 	Config   *Config
 	Database Database
-	Logger   *logrus.Logger // Added Logger field
+	Logger   *logrus.Logger // Logger instance
 }
 
 // NewMiddleware initializes a new authentication middleware.
@@ -22,7 +22,7 @@ func NewMiddleware(config *Config, db Database, logger *logrus.Logger) *Middlewa
 	return &Middleware{
 		Config:   config,
 		Database: db,
-		Logger:   logger, // Initialize Logger
+		Logger:   logger,
 	}
 }
 
@@ -33,17 +33,16 @@ func (m *Middleware) AuthMiddleware(next http.Handler) http.Handler {
 
 		// Extract access token
 		tokenString := extractToken(r, "access_token")
-		m.Logger.Debugf("Access token extracted: %s", tokenString)
-
-		// If no token found, reject the request
 		if tokenString == "" {
 			m.Logger.Warn("Authorization token not found")
 			WriteErrorResponse(w, "Authorization token not found", http.StatusUnauthorized)
 			return
 		}
 
-		// Check if the token is blacklisted
-		blacklisted, err := m.Database.IsTokenBlacklisted(tokenString)
+		m.Logger.WithField("access_token", tokenString).Debug("Access token extracted")
+
+		// Check if the token is blacklisted using request context
+		blacklisted, err := m.Database.IsTokenBlacklisted(r.Context(), tokenString)
 		if err != nil {
 			m.Logger.WithError(err).Error("Failed to check token blacklist")
 			WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
@@ -56,38 +55,48 @@ func (m *Middleware) AuthMiddleware(next http.Handler) http.Handler {
 		}
 
 		// Parse and validate the token
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-			// Ensure token is signed with HS256
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-			}
-			return m.Config.JwtSecret, nil
-		})
-
-		if err != nil || !token.Valid {
+		claims, err := m.parseAndValidateToken(tokenString)
+		if err != nil {
 			m.Logger.WithError(err).Warn("Invalid token")
 			WriteErrorResponse(w, "Invalid token", http.StatusUnauthorized)
 			return
 		}
 
-		// Validate token claims
-		if claims, ok := token.Claims.(jwt.MapClaims); ok {
-			// Validate expiration
-			if exp, ok := claims["exp"].(float64); !ok || float64(time.Now().Unix()) > exp {
-				m.Logger.Warn("Token has expired")
-				WriteErrorResponse(w, "Token has expired", http.StatusUnauthorized)
-				return
-			}
-
-			m.Logger.Debug("Token validated successfully")
-
-			// Attach claims to the request context
-			ctx := context.WithValue(r.Context(), "user", claims)
-			next.ServeHTTP(w, r.WithContext(ctx))
-			return
-		}
-
-		m.Logger.Warn("Invalid token claims")
-		WriteErrorResponse(w, "Invalid token claims", http.StatusUnauthorized)
+		// Attach claims to the request context
+		ctx := context.WithValue(r.Context(), "user", claims)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// parseAndValidateToken parses and validates a JWT token string.
+func (m *Middleware) parseAndValidateToken(tokenString string) (jwt.MapClaims, error) {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		// Ensure token is signed with HS256
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return m.Config.JwtSecret, nil
+	})
+
+	if err != nil || !token.Valid {
+		return nil, fmt.Errorf("invalid token: %w", err)
+	}
+
+	// Validate token claims
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, fmt.Errorf("invalid token claims")
+	}
+
+	// Validate expiration
+	if exp, ok := claims["exp"].(float64); !ok || float64(time.Now().Unix()) > exp {
+		return nil, fmt.Errorf("token has expired")
+	}
+
+	m.Logger.WithFields(logrus.Fields{
+		"user_id":  claims["sub"],
+		"provider": claims["provider"],
+	}).Debug("Token validated successfully")
+
+	return claims, nil
 }

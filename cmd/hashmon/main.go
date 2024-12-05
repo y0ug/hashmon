@@ -21,6 +21,8 @@ import (
 )
 
 func main() {
+	ctx := context.Background()
+
 	// Initialize Logrus
 	logger := logrus.New()
 	logger.SetFormatter(&logrus.JSONFormatter{}) // Optional: JSON formatting
@@ -69,14 +71,14 @@ func main() {
 		if err != nil {
 			logger.Fatalf("Failed to initialize BoltDB: %v", err)
 		}
-		defer db.Close()
+		defer db.Close(ctx)
 		logger.Info("BoltDB initialized successfully")
 	case "redis":
 		db, err = database.NewRedisDB(dbConfig)
 		if err != nil {
 			logger.Fatalf("Failed to initialize RedisDB: %v", err)
 		}
-		defer db.Close()
+		defer db.Close(ctx)
 		logger.Info("RedisDB initialized successfully")
 	default:
 		logger.Fatalf("Unsupported database type: %s", dbConfig.Type)
@@ -107,6 +109,10 @@ func main() {
 		logger.Fatalf("Failed to initialize auth config: %v", err)
 	}
 
+	logger.Infof("Auth type: %v", authConfig.AuthType)
+	for _, provider := range authConfig.Providers {
+		logger.Infof("Auth provider: %s", provider.Name())
+	}
 	// Initialize Auth Handler
 	authHandler := auth.NewHandler(authConfig, authDB, logger)
 
@@ -162,7 +168,7 @@ func main() {
 
 	// Check if hashes exist in the database; if not, import from file
 	hashCount, err := func() (int, error) {
-		hashes, err := db.LoadHashes()
+		hashes, err := db.LoadHashes(ctx)
 		if err != nil {
 			return 0, err
 		}
@@ -174,7 +180,7 @@ func main() {
 
 	if hashCount == 0 {
 		logger.Info("Hashes bucket is empty. Importing hashes from file.")
-		err := monitor.ImportHashesFromFile(hashmonCfg.InputFilePath)
+		err := monitor.ImportHashesFromFile(ctx, hashmonCfg.InputFilePath)
 		if err != nil {
 			logger.Fatalf("Failed to import hashes: %v", err)
 		}
@@ -183,7 +189,7 @@ func main() {
 	}
 
 	// Load hashes into memory (if needed)
-	hashRecords, err := monitor.LoadHashes()
+	hashRecords, err := monitor.LoadHashes(ctx)
 	if err != nil {
 		logger.Fatalf("Failed to load hashes from database: %v", err)
 	}
@@ -198,14 +204,14 @@ func main() {
 	webServer := webserver.NewWebServer(monitor, webServerConfig, authConfig, authHandler, logger)
 
 	// Create a cancellable context
-	ctx, cancel := context.WithCancel(context.Background())
+	ctxCancel, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	// Channel to listen for errors from the server
 	serverErrors := make(chan error, 1)
 
 	// Start the web server
-	server, err := webserver.StartWebServer(ctx, webServer)
+	server, err := webserver.StartWebServer(ctxCancel, webServer)
 	if err != nil {
 		logger.Fatalf("Failed to start web server: %v", err)
 	}
@@ -213,7 +219,7 @@ func main() {
 	// Start monitoring in a separate goroutine
 	go func() {
 		logger.Info("Starting monitoring process")
-		monitor.Start(ctx)
+		monitor.Start(ctxCancel)
 	}()
 
 	// Listen for OS signals to handle graceful shutdown
@@ -232,7 +238,7 @@ func main() {
 	cancel() // Cancel the monitor's context
 
 	// Create a context with timeout for the server's shutdown
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer shutdownCancel()
 
 	// Shutdown the web server gracefully

@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -32,7 +33,7 @@ func NewBoltDB(cfg *DatabaseConfig) (*BoltDB, error) {
 		path: cfg.Path,
 	}
 
-	err = boltDB.Initialize()
+	err = boltDB.Initialize(context.Background())
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +42,7 @@ func NewBoltDB(cfg *DatabaseConfig) (*BoltDB, error) {
 }
 
 // Initialize sets up the necessary buckets.
-func (b *BoltDB) Initialize() error {
+func (b *BoltDB) Initialize(ctx context.Context) error {
 	return b.db.Update(func(tx *bbolt.Tx) error {
 		_, err := tx.CreateBucketIfNotExists([]byte("Hashes"))
 		if err != nil {
@@ -73,7 +74,7 @@ func (b *BoltDB) Initialize() error {
 }
 
 // AddHash adds a new hash record.
-func (b *BoltDB) AddHash(record models.HashRecord) error {
+func (b *BoltDB) AddHash(ctx context.Context, record models.HashRecord) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -123,7 +124,7 @@ func (b *BoltDB) AddHash(record models.HashRecord) error {
 }
 
 // LoadHashes retrieves all hash records.
-func (b *BoltDB) LoadHashes() ([]models.HashRecord, error) {
+func (b *BoltDB) LoadHashes(ctx context.Context) ([]models.HashRecord, error) {
 	var records []models.HashRecord
 
 	err := b.db.View(func(tx *bbolt.Tx) error {
@@ -150,7 +151,7 @@ func (b *BoltDB) LoadHashes() ([]models.HashRecord, error) {
 }
 
 // UpdateHash updates an existing hash record.
-func (b *BoltDB) UpdateHash(record models.HashRecord) error {
+func (b *BoltDB) UpdateHash(ctx context.Context, record models.HashRecord) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -174,7 +175,7 @@ func (b *BoltDB) UpdateHash(record models.HashRecord) error {
 }
 
 // DeleteHash removes a hash record and its associated alert data.
-func (b *BoltDB) DeleteHash(sha256 string) error {
+func (b *BoltDB) DeleteHash(ctx context.Context, sha256 string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -189,11 +190,6 @@ func (b *BoltDB) DeleteHash(sha256 string) error {
 	if err != nil {
 		return fmt.Errorf("failed to delete hash from BoltDB: %w", err)
 	}
-
-	// Remove from alerted hashes
-	// This part might need to interact with the Monitor's in-memory state,
-	// but assuming that the Database layer is purely for storage,
-	// we'll handle only the persisted state here.
 
 	// Delete from AlertedHashes bucket
 	err = b.db.Update(func(tx *bbolt.Tx) error {
@@ -215,14 +211,12 @@ func (b *BoltDB) DeleteHash(sha256 string) error {
 		return fmt.Errorf("failed to delete alerted hashes from BoltDB: %w", err)
 	}
 
-	// Similarly, handle LastCheckTimes if it's stored separately.
-
 	logrus.WithField("sha256", sha256).Info("Hash deleted successfully")
 	return nil
 }
 
 // GetHash retrieves a specific hash record.
-func (b *BoltDB) GetHash(sha256 string) (models.HashRecord, error) {
+func (b *BoltDB) GetHash(ctx context.Context, sha256 string) (models.HashRecord, error) {
 	var record models.HashRecord
 
 	err := b.db.View(func(tx *bbolt.Tx) error {
@@ -244,7 +238,7 @@ func (b *BoltDB) GetHash(sha256 string) (models.HashRecord, error) {
 }
 
 // MarkAsAlerted marks a hash as alerted for a specific provider.
-func (b *BoltDB) MarkAsAlerted(sha256, provider string) error {
+func (b *BoltDB) MarkAsAlerted(ctx context.Context, sha256, provider string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -264,7 +258,7 @@ func (b *BoltDB) MarkAsAlerted(sha256, provider string) error {
 }
 
 // IsAlerted checks if a hash has been alerted for a specific provider.
-func (b *BoltDB) IsAlerted(sha256, provider string) (bool, error) {
+func (b *BoltDB) IsAlerted(ctx context.Context, sha256, provider string) (bool, error) {
 	var alerted bool
 
 	err := b.db.View(func(tx *bbolt.Tx) error {
@@ -285,12 +279,12 @@ func (b *BoltDB) IsAlerted(sha256, provider string) (bool, error) {
 }
 
 // Close closes the BoltDB connection.
-func (b *BoltDB) Close() error {
+func (b *BoltDB) Close(ctx context.Context) error {
 	return b.db.Close()
 }
 
 // AddBlacklistedToken adds a token string to the blacklist with its expiration time.
-func (b *BoltDB) AddBlacklistedToken(tokenString string, exp int64) error {
+func (b *BoltDB) AddBlacklistedToken(ctx context.Context, tokenString string, exp int64) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -316,7 +310,7 @@ func (b *BoltDB) AddBlacklistedToken(tokenString string, exp int64) error {
 
 // IsTokenBlacklisted checks if a token is in the blacklist.
 // If the token is expired, it removes it from the blacklist.
-func (b *BoltDB) IsTokenBlacklisted(tokenString string) (bool, error) {
+func (b *BoltDB) IsTokenBlacklisted(ctx context.Context, tokenString string) (bool, error) {
 	var exp int64
 
 	err := b.db.View(func(tx *bbolt.Tx) error {
@@ -359,7 +353,7 @@ func (b *BoltDB) IsTokenBlacklisted(tokenString string) (bool, error) {
 }
 
 // StoreRefreshToken saves a refresh token with associated user and expiration
-func (b *BoltDB) StoreRefreshToken(token string, userID string, expiresAt time.Time) error {
+func (b *BoltDB) StoreRefreshToken(ctx context.Context, token string, userID string, expiresAt time.Time) error {
 	return b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket([]byte("RefreshTokens"))
 		if bucket == nil {
@@ -381,7 +375,8 @@ func (b *BoltDB) StoreRefreshToken(token string, userID string, expiresAt time.T
 }
 
 // ValidateRefreshToken checks if a refresh token is valid and not expired
-func (b *BoltDB) ValidateRefreshToken(token string) (string, error) {
+// Returns the associated userID if valid.
+func (b *BoltDB) ValidateRefreshToken(ctx context.Context, token string) (string, error) {
 	var data struct {
 		UserID    string    `json:"user_id"`
 		ExpiresAt time.Time `json:"expires_at"`
@@ -407,7 +402,7 @@ func (b *BoltDB) ValidateRefreshToken(token string) (string, error) {
 }
 
 // RevokeRefreshToken removes a refresh token from the database
-func (b *BoltDB) RevokeRefreshToken(token string) error {
+func (b *BoltDB) RevokeRefreshToken(ctx context.Context, token string) error {
 	return b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket([]byte("RefreshTokens"))
 		if bucket == nil {
@@ -418,7 +413,7 @@ func (b *BoltDB) RevokeRefreshToken(token string) error {
 }
 
 // StoreProviderTokens stores the provider's tokens for a user.
-func (b *BoltDB) StoreProviderTokens(userID string, tokens auth.ProviderTokens) error {
+func (b *BoltDB) StoreProviderTokens(ctx context.Context, userID, provider string, tokens auth.ProviderTokens) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -427,12 +422,14 @@ func (b *BoltDB) StoreProviderTokens(userID string, tokens auth.ProviderTokens) 
 		return fmt.Errorf("failed to marshal ProviderTokens: %w", err)
 	}
 
+	key := generateProviderKey(provider, userID)
+
 	err = b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket([]byte("ProviderTokens"))
 		if bucket == nil {
 			return fmt.Errorf("ProviderTokens bucket does not exist")
 		}
-		return bucket.Put([]byte(userID), data)
+		return bucket.Put(key, data)
 	})
 	if err != nil {
 		return fmt.Errorf("failed to store provider tokens: %w", err)
@@ -442,17 +439,19 @@ func (b *BoltDB) StoreProviderTokens(userID string, tokens auth.ProviderTokens) 
 }
 
 // GetProviderTokens retrieves the provider's tokens for a user.
-func (b *BoltDB) GetProviderTokens(userID string) (auth.ProviderTokens, error) {
+func (b *BoltDB) GetProviderTokens(ctx context.Context, userID, provider string) (auth.ProviderTokens, error) {
 	var tokens auth.ProviderTokens
+
+	key := generateProviderKey(provider, userID)
 
 	err := b.db.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket([]byte("ProviderTokens"))
 		if bucket == nil {
 			return fmt.Errorf("ProviderTokens bucket does not exist")
 		}
-		val := bucket.Get([]byte(userID))
+		val := bucket.Get(key)
 		if val == nil {
-			return fmt.Errorf("provider tokens not found for userID %s", userID)
+			return fmt.Errorf("provider tokens not found for userID %s and provider %s", userID, provider)
 		}
 		return json.Unmarshal(val, &tokens)
 	})
@@ -464,7 +463,7 @@ func (b *BoltDB) GetProviderTokens(userID string) (auth.ProviderTokens, error) {
 }
 
 // UpdateProviderTokens updates the provider's tokens for a user.
-func (b *BoltDB) UpdateProviderTokens(userID string, tokens auth.ProviderTokens) error {
+func (b *BoltDB) UpdateProviderTokens(ctx context.Context, userID, provider string, tokens auth.ProviderTokens) error {
 	// Since we're overwriting the tokens, it's the same as storing them
-	return b.StoreProviderTokens(userID, tokens)
+	return b.StoreProviderTokens(ctx, userID, provider, tokens)
 }

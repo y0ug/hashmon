@@ -25,7 +25,7 @@ func NewRedisDB(cfg *DatabaseConfig) (*RedisDB, error) {
 		DB:       cfg.RedisDB,   // use default DB
 	})
 
-	// Test connection
+	// Use context.Background() for initial connection test
 	ctx := context.Background()
 	_, err := rdb.Ping(ctx).Result()
 	if err != nil {
@@ -39,20 +39,20 @@ func NewRedisDB(cfg *DatabaseConfig) (*RedisDB, error) {
 }
 
 // Initialize sets up necessary Redis structures if needed.
-func (r *RedisDB) Initialize() error {
+func (r *RedisDB) Initialize(ctx context.Context) error {
 	// Redis is schema-less; initialization might not be necessary.
 	return nil
 }
 
 // AddHash adds a new hash record.
-func (r *RedisDB) AddHash(record models.HashRecord) error {
+func (r *RedisDB) AddHash(ctx context.Context, record models.HashRecord) error {
 	data, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("failed to marshal HashRecord: %w", err)
 	}
 
 	key := fmt.Sprintf("hash:%s", record.SHA256)
-	exists, err := r.client.Exists(r.ctx, key).Result()
+	exists, err := r.client.Exists(ctx, key).Result()
 	if err != nil {
 		return err
 	}
@@ -61,17 +61,17 @@ func (r *RedisDB) AddHash(record models.HashRecord) error {
 		return nil
 	}
 
-	return r.client.Set(r.ctx, key, data, 0).Err()
+	return r.client.Set(ctx, key, data, 0).Err()
 }
 
 // LoadHashes retrieves all hash records.
-func (r *RedisDB) LoadHashes() ([]models.HashRecord, error) {
+func (r *RedisDB) LoadHashes(ctx context.Context) ([]models.HashRecord, error) {
 	var records []models.HashRecord
 
-	iter := r.client.Scan(r.ctx, 0, "hash:*", 0).Iterator()
-	for iter.Next(r.ctx) {
+	iter := r.client.Scan(ctx, 0, "hash:*", 0).Iterator()
+	for iter.Next(ctx) {
 		key := iter.Val()
-		val, err := r.client.Get(r.ctx, key).Result()
+		val, err := r.client.Get(ctx, key).Result()
 		if err != nil {
 			continue
 		}
@@ -90,30 +90,30 @@ func (r *RedisDB) LoadHashes() ([]models.HashRecord, error) {
 }
 
 // UpdateHash updates an existing hash record.
-func (r *RedisDB) UpdateHash(record models.HashRecord) error {
+func (r *RedisDB) UpdateHash(ctx context.Context, record models.HashRecord) error {
 	data, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("failed to marshal HashRecord: %w", err)
 	}
 
 	key := fmt.Sprintf("hash:%s", record.SHA256)
-	return r.client.Set(r.ctx, key, data, 0).Err()
+	return r.client.Set(ctx, key, data, 0).Err()
 }
 
 // DeleteHash removes a hash record and its associated alert data.
-func (r *RedisDB) DeleteHash(sha256 string) error {
+func (r *RedisDB) DeleteHash(ctx context.Context, sha256 string) error {
 	key := fmt.Sprintf("hash:%s", sha256)
-	err := r.client.Del(r.ctx, key).Err()
+	err := r.client.Del(ctx, key).Err()
 	if err != nil {
 		return err
 	}
 
 	// Remove alerted hashes
 	pattern := fmt.Sprintf("alerted:%s:*", sha256)
-	iter := r.client.Scan(r.ctx, 0, pattern, 0).Iterator()
-	for iter.Next(r.ctx) {
+	iter := r.client.Scan(ctx, 0, pattern, 0).Iterator()
+	for iter.Next(ctx) {
 		alertKey := iter.Val()
-		err := r.client.Del(r.ctx, alertKey).Err()
+		err := r.client.Del(ctx, alertKey).Err()
 		if err != nil {
 			return err
 		}
@@ -126,11 +126,11 @@ func (r *RedisDB) DeleteHash(sha256 string) error {
 }
 
 // GetHash retrieves a specific hash record.
-func (r *RedisDB) GetHash(sha256 string) (models.HashRecord, error) {
+func (r *RedisDB) GetHash(ctx context.Context, sha256 string) (models.HashRecord, error) {
 	var record models.HashRecord
 
 	key := fmt.Sprintf("hash:%s", sha256)
-	val, err := r.client.Get(r.ctx, key).Result()
+	val, err := r.client.Get(ctx, key).Result()
 	if err != nil {
 		if err == redis.Nil {
 			return record, ErrHashNotFound
@@ -147,15 +147,15 @@ func (r *RedisDB) GetHash(sha256 string) (models.HashRecord, error) {
 }
 
 // MarkAsAlerted marks a hash as alerted for a specific provider.
-func (r *RedisDB) MarkAsAlerted(sha256, provider string) error {
+func (r *RedisDB) MarkAsAlerted(ctx context.Context, sha256, provider string) error {
 	key := fmt.Sprintf("alerted:%s:%s", sha256, provider)
-	return r.client.Set(r.ctx, key, "1", 0).Err()
+	return r.client.Set(ctx, key, "1", 0).Err()
 }
 
 // IsAlerted checks if a hash has been alerted for a specific provider.
-func (r *RedisDB) IsAlerted(sha256, provider string) (bool, error) {
+func (r *RedisDB) IsAlerted(ctx context.Context, sha256, provider string) (bool, error) {
 	key := fmt.Sprintf("alerted:%s:%s", sha256, provider)
-	val, err := r.client.Get(r.ctx, key).Result()
+	val, err := r.client.Get(ctx, key).Result()
 	if err != nil {
 		if err == redis.Nil {
 			return false, nil
@@ -166,12 +166,12 @@ func (r *RedisDB) IsAlerted(sha256, provider string) (bool, error) {
 }
 
 // Close closes the Redis client connection.
-func (r *RedisDB) Close() error {
+func (r *RedisDB) Close(ctx context.Context) error {
 	return r.client.Close()
 }
 
 // AddBlacklistedToken adds a token string to the blacklist with its expiration time.
-func (r *RedisDB) AddBlacklistedToken(tokenString string, exp int64) error {
+func (r *RedisDB) AddBlacklistedToken(ctx context.Context, tokenString string, exp int64) error {
 	// Calculate TTL
 	expirationTime := time.Unix(exp, 0)
 	ttl := time.Until(expirationTime)
@@ -184,13 +184,13 @@ func (r *RedisDB) AddBlacklistedToken(tokenString string, exp int64) error {
 	key := fmt.Sprintf("blacklist:%s", tokenString)
 
 	// Store the key with TTL
-	return r.client.Set(r.ctx, key, "1", ttl).Err()
+	return r.client.Set(ctx, key, "1", ttl).Err()
 }
 
 // IsTokenBlacklisted checks if a token is in the blacklist.
-func (r *RedisDB) IsTokenBlacklisted(tokenString string) (bool, error) {
+func (r *RedisDB) IsTokenBlacklisted(ctx context.Context, tokenString string) (bool, error) {
 	key := fmt.Sprintf("blacklist:%s", tokenString)
-	exists, err := r.client.Exists(r.ctx, key).Result()
+	exists, err := r.client.Exists(ctx, key).Result()
 	if err != nil {
 		return false, err
 	}
@@ -198,7 +198,7 @@ func (r *RedisDB) IsTokenBlacklisted(tokenString string) (bool, error) {
 }
 
 // StoreRefreshToken saves a refresh token with associated user and expiration.
-func (r *RedisDB) StoreRefreshToken(token string, userID string, expiresAt time.Time) error {
+func (r *RedisDB) StoreRefreshToken(ctx context.Context, token string, userID string, expiresAt time.Time) error {
 	// Define a unique key for the refresh token
 	key := fmt.Sprintf("refresh_token:%s", token)
 
@@ -224,17 +224,17 @@ func (r *RedisDB) StoreRefreshToken(token string, userID string, expiresAt time.
 	}
 
 	// Store the refresh token with TTL
-	return r.client.Set(r.ctx, key, encoded, ttl).Err()
+	return r.client.Set(ctx, key, encoded, ttl).Err()
 }
 
 // ValidateRefreshToken checks if a refresh token is valid and not expired.
 // Returns the associated userID if valid.
-func (r *RedisDB) ValidateRefreshToken(token string) (string, error) {
+func (r *RedisDB) ValidateRefreshToken(ctx context.Context, token string) (string, error) {
 	// Define the key for the refresh token
 	key := fmt.Sprintf("refresh_token:%s", token)
 
 	// Get the token data
-	val, err := r.client.Get(r.ctx, key).Result()
+	val, err := r.client.Get(ctx, key).Result()
 	if err != nil {
 		if err == redis.Nil {
 			return "", fmt.Errorf("refresh token not found")
@@ -255,7 +255,7 @@ func (r *RedisDB) ValidateRefreshToken(token string) (string, error) {
 	// Check if the token has expired
 	if time.Now().After(data.ExpiresAt) {
 		// Token expired; revoke it
-		r.RevokeRefreshToken(token)
+		r.RevokeRefreshToken(ctx, token)
 		return "", fmt.Errorf("refresh token expired")
 	}
 
@@ -263,33 +263,15 @@ func (r *RedisDB) ValidateRefreshToken(token string) (string, error) {
 }
 
 // RevokeRefreshToken removes a refresh token from the database.
-// // RevokeRefreshToken removes a refresh token from the database.
-func (r *RedisDB) RevokeRefreshToken(token string) error {
+func (r *RedisDB) RevokeRefreshToken(ctx context.Context, token string) error {
 	// Define the key for the refresh token
 	key := fmt.Sprintf("refresh_token:%s", token)
-	return r.client.Del(r.ctx, key).Err()
-}
-
-func (r *RedisDB) StoreProviderRefreshToken(userID, refreshToken string) error {
-	key := fmt.Sprintf("provider_refresh_token:%s", userID)
-	return r.client.Set(r.ctx, key, refreshToken, 0).Err() // 0 means no expiration
-}
-
-func (r *RedisDB) GetProviderRefreshToken(userID string) (string, error) {
-	key := fmt.Sprintf("provider_refresh_token:%s", userID)
-	val, err := r.client.Get(r.ctx, key).Result()
-	if err != nil {
-		if err == redis.Nil {
-			return "", fmt.Errorf("refresh token not found for userID %s", userID)
-		}
-		return "", err
-	}
-	return val, nil
+	return r.client.Del(ctx, key).Err()
 }
 
 // StoreProviderTokens stores the provider's tokens for a user.
-func (r *RedisDB) StoreProviderTokens(userID string, tokens auth.ProviderTokens) error {
-	key := fmt.Sprintf("provider_tokens:%s", userID)
+func (r *RedisDB) StoreProviderTokens(ctx context.Context, userID, provider string, tokens auth.ProviderTokens) error {
+	key := fmt.Sprintf("provider_tokens:%s:%s", provider, userID)
 	encoded, err := json.Marshal(tokens)
 	if err != nil {
 		return fmt.Errorf("failed to marshal ProviderTokens: %w", err)
@@ -299,18 +281,18 @@ func (r *RedisDB) StoreProviderTokens(userID string, tokens auth.ProviderTokens)
 	if ttl <= 0 {
 		return fmt.Errorf("invalid expiration time for provider tokens")
 	}
-	return r.client.Set(r.ctx, key, encoded, ttl).Err()
+	return r.client.Set(ctx, key, encoded, ttl).Err()
 }
 
 // GetProviderTokens retrieves the provider's tokens for a user.
-func (r *RedisDB) GetProviderTokens(userID string) (auth.ProviderTokens, error) {
+func (r *RedisDB) GetProviderTokens(ctx context.Context, userID, provider string) (auth.ProviderTokens, error) {
 	var tokens auth.ProviderTokens
 
-	key := fmt.Sprintf("provider_tokens:%s", userID)
-	val, err := r.client.Get(r.ctx, key).Result()
+	key := fmt.Sprintf("provider_tokens:%s:%s", provider, userID)
+	val, err := r.client.Get(ctx, key).Result()
 	if err != nil {
 		if err == redis.Nil {
-			return tokens, fmt.Errorf("provider tokens not found for userID %s", userID)
+			return tokens, fmt.Errorf("provider tokens not found for userID %s and provider %s", userID, provider)
 		}
 		return tokens, err
 	}
@@ -324,7 +306,7 @@ func (r *RedisDB) GetProviderTokens(userID string) (auth.ProviderTokens, error) 
 }
 
 // UpdateProviderTokens updates the provider's tokens for a user.
-func (r *RedisDB) UpdateProviderTokens(userID string, tokens auth.ProviderTokens) error {
+func (r *RedisDB) UpdateProviderTokens(ctx context.Context, userID, provider string, tokens auth.ProviderTokens) error {
 	// Overwrite the existing tokens with the new ones
-	return r.StoreProviderTokens(userID, tokens)
+	return r.StoreProviderTokens(ctx, userID, provider, tokens)
 }

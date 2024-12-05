@@ -30,10 +30,16 @@ func TestAuthMiddlewareValidToken(t *testing.T) {
 
 	// Create a valid token
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": "user123",
-		"exp": time.Now().Add(15 * time.Minute).Unix(),
+		"sub":      "user123",
+		"name":     "John Doe",
+		"email":    "john@example.com",
+		"provider": "testprovider",
+		"exp":      time.Now().Add(15 * time.Minute).Unix(),
 	})
-	tokenString, _ := token.SignedString(middleware.Config.JwtSecret)
+	tokenString, err := token.SignedString(middleware.Config.JwtSecret)
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
 
 	req := httptest.NewRequest("GET", "/protected", nil)
 	req.Header.Set("Authorization", "Bearer "+tokenString)
@@ -43,7 +49,7 @@ func TestAuthMiddlewareValidToken(t *testing.T) {
 		// Check if the context has the user claims
 		claims, ok := r.Context().Value("user").(jwt.MapClaims)
 		if !ok || claims["sub"] != "user123" {
-			t.Errorf("user claims not found in context")
+			t.Errorf("user claims not found or incorrect in context")
 		}
 		w.WriteHeader(http.StatusOK)
 	})
@@ -63,10 +69,16 @@ func TestAuthMiddlewareExpiredToken(t *testing.T) {
 
 	// Create an expired token
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": "user123",
-		"exp": time.Now().Add(-15 * time.Minute).Unix(),
+		"sub":      "user123",
+		"name":     "John Doe",
+		"email":    "john@example.com",
+		"provider": "testprovider",
+		"exp":      time.Now().Add(-15 * time.Minute).Unix(),
 	})
-	tokenString, _ := token.SignedString(middleware.Config.JwtSecret)
+	tokenString, err := token.SignedString(middleware.Config.JwtSecret)
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
 
 	req := httptest.NewRequest("GET", "/protected", nil)
 	req.Header.Set("Authorization", "Bearer "+tokenString)

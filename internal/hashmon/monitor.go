@@ -34,9 +34,10 @@ type Monitor struct {
 
 // NewMonitor initializes a new Monitor.
 func NewMonitor(config MonitorConfig, maxConcurrency int64) *Monitor {
+	ctx := context.TODO()
 	// Initialize alerted map from the database
 	alerted := make(map[string]map[string]bool)
-	hashes, err := config.Database.LoadHashes()
+	hashes, err := config.Database.LoadHashes(ctx)
 	if err != nil {
 		logrus.Fatalf("Failed to load hashes from database: %v", err)
 	}
@@ -45,7 +46,7 @@ func NewMonitor(config MonitorConfig, maxConcurrency int64) *Monitor {
 		// For each hash, check if it's alerted by any provider
 		for _, apiClient := range config.APIClients {
 			provider := apiClient.ProviderName()
-			alertedStatus, err := config.Database.IsAlerted(record.SHA256, provider)
+			alertedStatus, err := config.Database.IsAlerted(ctx, record.SHA256, provider)
 			if err != nil {
 				logrus.WithError(err).Errorf("Failed to check alerted status for hash %s and provider %s", record.SHA256, provider)
 				continue
@@ -67,19 +68,19 @@ func NewMonitor(config MonitorConfig, maxConcurrency int64) *Monitor {
 }
 
 // AddHash adds a new hash record to the database.
-func (m *Monitor) AddHash(record models.HashRecord) error {
-	return m.Config.Database.AddHash(record)
+func (m *Monitor) AddHash(ctx context.Context, record models.HashRecord) error {
+	return m.Config.Database.AddHash(ctx, record)
 }
 
 // ImportHashesFromFile imports hashes from a given file path into the database.
-func (m *Monitor) ImportHashesFromFile(filePath string) error {
+func (m *Monitor) ImportHashesFromFile(ctx context.Context, filePath string) error {
 	hashRecords, err := ReadRecords(filePath) // Implement ReadRecords as per previous instructions
 	if err != nil {
 		return fmt.Errorf("failed to read records from file: %w", err)
 	}
 
 	for _, record := range hashRecords {
-		err := m.AddHash(record)
+		err := m.AddHash(ctx, record)
 		if err != nil {
 			logrus.WithError(err).WithField("sha256", record.SHA256).Error("Failed to add hash")
 			// Decide whether to continue or halt on error
@@ -92,8 +93,8 @@ func (m *Monitor) ImportHashesFromFile(filePath string) error {
 }
 
 // LoadHashes loads all hash records from the database.
-func (m *Monitor) LoadHashes() ([]models.HashRecord, error) {
-	return m.Config.Database.LoadHashes()
+func (m *Monitor) LoadHashes(ctx context.Context) ([]models.HashRecord, error) {
+	return m.Config.Database.LoadHashes(ctx)
 }
 
 // Start begins the monitoring process.
@@ -124,7 +125,7 @@ func (m *Monitor) checkAllHashes(ctx context.Context) {
 	var wg sync.WaitGroup
 
 	// Retrieve all hashes from the database
-	hashRecords, err := m.LoadHashes()
+	hashRecords, err := m.LoadHashes(ctx)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to load hashes for checking")
 		return
@@ -201,7 +202,7 @@ func (m *Monitor) checkHash(ctx context.Context, record models.HashRecord) {
 			m.mutex.Unlock()
 
 			// Persist to DB
-			err = m.Config.Database.MarkAsAlerted(record.SHA256, provider)
+			err = m.Config.Database.MarkAsAlerted(ctx, record.SHA256, provider)
 			if err != nil {
 				logrus.WithError(err).Error("Failed to update database with alerted hash")
 			}
@@ -212,7 +213,7 @@ func (m *Monitor) checkHash(ctx context.Context, record models.HashRecord) {
 		record.LastCheckAt = now
 
 		// Persist the updated HashRecord back to the database
-		err = m.Config.Database.UpdateHash(record)
+		err = m.Config.Database.UpdateHash(ctx, record)
 		if err != nil {
 			logrus.WithError(err).Error("Failed to update database with LastCheckAt")
 		}
@@ -220,19 +221,19 @@ func (m *Monitor) checkHash(ctx context.Context, record models.HashRecord) {
 }
 
 // GetAllHashStatuses retrieves the status of all hashes.
-func (m *Monitor) GetAllHashStatuses() []models.HashStatus {
+func (m *Monitor) GetAllHashStatuses(ctx context.Context) []models.HashStatus {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
 	var statuses []models.HashStatus
-	hashRecords, err := m.LoadHashes()
+	hashRecords, err := m.LoadHashes(ctx)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to load hashes for status retrieval")
 		return statuses
 	}
 
 	for _, record := range hashRecords {
-		status, err := m.GetHashStatus(record.SHA256)
+		status, err := m.GetHashStatus(ctx, record.SHA256)
 		if err != nil {
 			logrus.WithError(err).Error("Failed to find hash")
 			continue
@@ -242,8 +243,8 @@ func (m *Monitor) GetAllHashStatuses() []models.HashStatus {
 	return statuses
 }
 
-func (m *Monitor) GetHashStatus(sha256 string) (models.HashStatus, error) {
-	hash, err := m.Config.Database.GetHash(sha256)
+func (m *Monitor) GetHashStatus(ctx context.Context, sha256 string) (models.HashStatus, error) {
+	hash, err := m.Config.Database.GetHash(ctx, sha256)
 	if err != nil {
 		return models.HashStatus{}, err
 	}
@@ -252,7 +253,7 @@ func (m *Monitor) GetHashStatus(sha256 string) (models.HashStatus, error) {
 	alertedBy := []string{}
 	for _, apiClient := range m.Config.APIClients {
 		provider := apiClient.ProviderName()
-		alerted, err := m.Config.Database.IsAlerted(sha256, provider)
+		alerted, err := m.Config.Database.IsAlerted(ctx, sha256, provider)
 		if err != nil {
 			logrus.WithError(err).Warnf("Failed to get alerted status for hash %s and provider %s", sha256, provider)
 			continue

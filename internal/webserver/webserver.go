@@ -76,8 +76,11 @@ func (ws *WebServer) InitRouter() *mux.Router {
 
 	// Authentication routes
 	if ws.authConfig.AuthType == "oauth2" {
-		authRouter.HandleFunc("/login", ws.authHandler.HandleLogin).Methods("GET")
-		authRouter.HandleFunc("/callback", ws.authHandler.HandleCallback).Methods("GET")
+
+		authRouter.HandleFunc("/providers", ws.authHandler.HandlerProviders).Methods("GET")
+		authRouter.HandleFunc("/login/{provider}", ws.authHandler.HandleLogin).Methods("GET")
+		authRouter.HandleFunc("/callback/{provider}", ws.authHandler.HandleCallback).Methods("GET")
+
 		authRouter.Handle("/status", ws.authHandler.AuthMiddleware(http.HandlerFunc(ws.authHandler.HandleStatus))).Methods("GET")
 		authRouter.Handle("/logout", ws.authHandler.AuthMiddleware(http.HandlerFunc(ws.authHandler.HandleLogout))).Methods("POST")
 		authRouter.Handle("/logout", ws.authHandler.AuthMiddleware(http.HandlerFunc(ws.authHandler.HandleLogout))).Methods("GET")
@@ -101,7 +104,8 @@ func (ws *WebServer) InitRouter() *mux.Router {
 
 // handleGetHashes handles the GET /hashes endpoint.
 func (ws *WebServer) handleGetHashes(w http.ResponseWriter, r *http.Request) {
-	hashes := ws.Monitor.GetAllHashStatuses()
+	ctx := r.Context()
+	hashes := ws.Monitor.GetAllHashStatuses(ctx)
 
 	response := models.HashesResponse{
 		Hashes: hashes,
@@ -112,9 +116,10 @@ func (ws *WebServer) handleGetHashes(w http.ResponseWriter, r *http.Request) {
 
 // handleGetHashDetail handles the GET /hashes/{sha256} endpoint.
 func (ws *WebServer) handleGetHashDetail(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	vars := mux.Vars(r)
 	sha256 := vars["sha256"]
-	hashStatus, err := ws.Monitor.GetHashStatus(sha256)
+	hashStatus, err := ws.Monitor.GetHashStatus(ctx, sha256)
 	if err != nil {
 		ws.Logger.Errorf("Failed to get hash status for %s: %v", sha256, err)
 		auth.WriteErrorResponse(w, "Hash not found", http.StatusNotFound)
@@ -130,6 +135,7 @@ func (ws *WebServer) handleGetHashDetail(w http.ResponseWriter, r *http.Request)
 
 // handleAddHash handles the PUT /hashes endpoint.
 func (ws *WebServer) handleAddHash(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	var newHash models.HashRecord
 
 	// Decode the JSON payload
@@ -156,7 +162,7 @@ func (ws *WebServer) handleAddHash(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add the new hash to the monitor
-	err = ws.Monitor.AddHash(newHash)
+	err = ws.Monitor.AddHash(ctx, newHash)
 	if err != nil {
 		ws.Logger.Errorf("Failed to add hash: %v", err)
 		auth.WriteErrorResponse(w, "Failed to add hash", http.StatusInternalServerError)
@@ -169,6 +175,7 @@ func (ws *WebServer) handleAddHash(w http.ResponseWriter, r *http.Request) {
 
 // handleDeleteHash handles the DELETE /hashes/{sha256} endpoint.
 func (ws *WebServer) handleDeleteHash(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	vars := mux.Vars(r)
 	sha256, exists := vars["sha256"]
 	if !exists || sha256 == "" {
@@ -178,7 +185,7 @@ func (ws *WebServer) handleDeleteHash(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Delete the hash from the monitor
-	err := ws.Monitor.Config.Database.DeleteHash(sha256)
+	err := ws.Monitor.Config.Database.DeleteHash(ctx, sha256)
 	if err != nil {
 		ws.Logger.Errorf("Failed to delete hash %s: %v", sha256, err)
 		auth.WriteErrorResponse(w, "Failed to delete hash", http.StatusInternalServerError)
