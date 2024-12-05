@@ -27,15 +27,15 @@
   {:else}
     <div class="text-center">
       <h2 class="text-2xl font-bold">Hash Not Found</h2>
-      <button class="btn btn-primary mt-4" on:click={goBack()}>Go Back</button>
+      <button class="btn btn-primary mt-4" onclick={goBack()}>Go Back</button>
     </div>
   {/if}
 
   <!-- Notification -->
   <Notification
-    open="{notification.open}"
-    message="{notification.message}"
-    severity="{notification.severity}"
-    on:close="{() => notification.open = false}"
+    open={notification.open}
+    message={notification.message}
+    severity={notification.severity}
+    on:close={() => notification.open = false}
   />
 </div>

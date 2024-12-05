@@ -45,7 +45,7 @@
 
 <div>
   <h2 class="text-2xl mb-4">Add New Hash</h2>
-  <form on:submit|preventDefault={handleSubmit} class="p-4 bg-base-200 rounded">
+  <form onsubmit|preventDefault={handleSubmit} class="p-4 bg-base-200 rounded">
     <div class="mb-4">
       <label class="label">
         <span class="label-text">SHA256*</span>
