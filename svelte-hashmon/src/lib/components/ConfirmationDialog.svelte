@@ -36,5 +36,4 @@
 {/if}
 
 <style>
-  /* Optional: Add custom styles if needed */
 </style>

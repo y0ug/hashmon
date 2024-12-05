@@ -1,34 +1,32 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import { deleteHash } from '../lib/api';
-  import type { HashStatus } from '../models/Hash';
-  import ConfirmationDialog from '../components/ConfirmationDialog.svelte';
-  import Notification from '../components/Notification.svelte';
+  import { deleteHash } from '$lib/api';
+  import type { HashStatus } from '$lib/models/Hash';
+  import ConfirmationDialog from '$lib/components/ConfirmationDialog.svelte';
+  import AddHashForm from '$lib/components/AddHashForm.svelte';
+  import Notification from '$lib/components/Notification.svelte';
 
 	let { data }: { data: PageData } = $props();
   let hashes = data.hashes;
 
   const dispatch = createEventDispatcher();
 
-  let loading = false;
   let dialogOpen = $state(false);
   let hashToDelete: HashStatus | null = $state(null);
   let notification = $state({ open: false, message: '', severity: 'success' });
+  let addDialogOpen = $state(false);
 
-  const handleView = (sha256: string) => {
-    // navigate(`/hashes/${sha256}`);
-  };
-
-  const handleDeleteClick = (hash: HashStatus) => {
+   const handleDeleteClick = (hash: HashStatus) => {
     hashToDelete = hash;
     dialogOpen = true;
   };
 
   const handleConfirmDelete = async () => {
     if (!hashToDelete) return;
-    loading = true;
     try {
       await deleteHash(hashToDelete.sha256);
+      // Remove the deleted hash from the list
+      // hashes = hashes.filter(h => h.sha256 !== hashToDelete!.sha256);
       dispatch('hashDeleted', hashToDelete.sha256);
       notification = { open: true, message: 'Hash deleted successfully.', severity: 'success' };
     } catch (error) {
@@ -37,7 +35,6 @@
     } finally {
       dialogOpen = false;
       hashToDelete = null;
-      loading = false;
     }
   };
 
@@ -45,10 +42,25 @@
     dialogOpen = false;
     hashToDelete = null;
   };
-</script>
 
-<div>
+  const handleHashAdded = (event: CustomEvent<void>) => {
+    addDialogOpen = false;
+    notification = { open: true, message: 'Hash added successfully.', severity: 'success' };
+    // Optionally, refresh the hash list or append the new hash
+    // For example, you can fetch the latest hashes from the server:
+    // fetchHashes();
+    // Or, if the new hash data is returned, append it directly:
+    // hashes = [...hashes, event.detail.newHash];
+  };
+</script>
+<div class="container mx-auto p-4">
+
   <h2 class="text-2xl mb-4">Hash List</h2>
+
+  <!-- Add Hash Button -->
+  <button class="btn btn-primary mb-4" onclick={() => addDialogOpen = true}>
+    Add Hash
+  </button>
   {#if hashes.length === 0}
     <p>No hashes available.</p>
   {:else}
@@ -97,6 +109,21 @@
       cancelText="Cancel"
     />
   {/if}
+
+  <!-- Add Hash Dialog -->
+  {#if addDialogOpen}
+    <div class="modal modal-open">
+      <div class="modal-box">
+        <AddHashForm on:hashAdded={handleHashAdded} />
+        <div class="modal-action">
+          <button class="btn btn-secondary" onclick={() => addDialogOpen = false}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
 
   <!-- Notification -->
   {#if notification.open}

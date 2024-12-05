@@ -1,8 +1,8 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import { addHash } from '../lib/api';
-  import { loading } from '$lib/stores';
-  import type { NewHash } from '../models/Hash';
+  import { addHash } from '$lib/api';
+  import Notification from '$lib/components/Notification.svelte';
+  import type { NewHash } from '$lib/models/Hash';
 
   const dispatch = createEventDispatcher();
 
@@ -12,7 +12,7 @@
     build_id: '',
   };
 
-  let notification = { open: false, message: '', severity: 'success' };
+  let notification = $state({ open: false, message: '', severity: 'success' });
 
   const handleChange = (e: Event) => {
     const target = e.target as HTMLInputElement;
@@ -27,17 +27,18 @@
       return;
     }
 
-    loading.set(true);
+    // loading.set(true);
 
     try {
-      await addHash(formData);
+      // await addHash(formData);
+      throw new Error('test notification')
       formData = { sha256: '', filename: '', build_id: '' };
       dispatch('hashAdded');
     } catch (error) {
       console.error(error);
       notification = { open: true, message: 'Failed to add hash.', severity: 'error' };
     } finally {
-      loading.set(false);
+      // loading.set(false);
     }
   };
 </script>
@@ -82,13 +83,13 @@
     <button
       type="submit"
       class="btn btn-primary"
-      disabled={loading}
     >
-      {#if loading}
-        Adding...
-      {:else}
+      <!-- disabled={loading} -->
+      <!-- {#if loading} -->
+      <!--   Adding... -->
+      <!-- {:else} -->
         Add Hash
-      {/if}
+      <!-- {/if} -->
     </button>
   </form>
   {#if notification.open}
@@ -99,4 +100,11 @@
       </div>
     </div>
   {/if}
+  <!-- Notification -->
+  <!-- {#if notification.open} -->
+  <!--   <Notification -->
+  <!--     {notification} -->
+  <!--     on:close={() => notification.open = false} -->
+  <!--   /> -->
+  <!-- {/if} -->
 </div>

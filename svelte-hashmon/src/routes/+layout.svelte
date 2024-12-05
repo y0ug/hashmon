@@ -2,9 +2,9 @@
 	import '../app.css';
 	let { children } = $props();
   import { onMount } from 'svelte';
-  import Header from '../components/Header.svelte';
-  import { checkAuthStatus } from '../lib/auth';
-  import { isAuthenticated, loading } from '../lib/stores';
+  import Header from '$lib/components/Header.svelte';
+  import { checkAuthStatus } from '$lib/auth';
+  import { isAuthenticated, loading } from '$lib/stores';
 
   onMount(() => {
     checkAuthStatus();
@@ -18,7 +18,9 @@
     <div class="loader">Loading...</div>
   </div>
 {:else}
+  <div class="flex justify-center mt-20">
 {@render children()}
+  </div>
 {/if}
 
 <style>

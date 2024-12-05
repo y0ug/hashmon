@@ -1,11 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import HashDetail from '../../../components/HashDetail.svelte';
-  import Notification from '../../../components/Notification.svelte';
-  import type { HashStatus } from '../../../models/Hash';
+  import HashDetail from '$lib/components/HashDetail.svelte';
+  import Notification from '$lib/components/Notification.svelte';
+  import type { HashStatus } from '$lib/models/Hash';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
-  import { getHashDetail } from '../../../lib/api';
+  import { getHashDetail } from '$lib/api';
  	import type { PageData } from './$types';
 
  

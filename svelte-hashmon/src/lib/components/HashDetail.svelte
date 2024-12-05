@@ -1,19 +1,13 @@
 <script lang="ts">
-  import type { HashStatus } from '../models/Hash';
+  import type { HashStatus } from '$lib/models/Hash';
   import { createEventDispatcher } from 'svelte';
 
-  // let props = $props();
-  // let hash = props.hash;
-  // Define the props that the component expects
+
   export let hash: HashStatus | null = null;
 
   // Event dispatcher in case you need to emit events to parent components
   const dispatch = createEventDispatcher();
 
-  // Function to handle navigation back
-  const goBack = () => {
-    // navigate(-1);
-  };
 </script>
 
 {#if hash}
@@ -60,5 +54,4 @@
 {/if}
 
 <style>
-  /* Optional: Add component-specific styles here */
 </style>

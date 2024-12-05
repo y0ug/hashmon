@@ -1,7 +1,7 @@
 import axios, { AxiosError, type AxiosResponse, type AxiosRequestConfig } from 'axios';
-import { type HttpResp } from '../models/HttpResp';
-import { type HashesResponse, type HashDetailResponse, type NewHash } from '../models/Hash';
-import { type User } from '../models/User';
+import { type HttpResp } from '$lib/models/HttpResp';
+import { type HashesResponse, type HashDetailResponse, type NewHash } from './models/Hash';
+import { type User } from '$lib/models/User';
 
 // Set the base URL of your backend API
 const API_BASE_URL = 'http://127.0.0.1:8808'; // Adjust as needed

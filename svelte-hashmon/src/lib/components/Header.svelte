@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { isAuthenticated, user, loading } from '../lib/stores';
-  import { logout } from '../lib/auth';
+  import { isAuthenticated, user, loading } from '$lib/stores';
+  import { logout } from '$lib/auth';
   import { goto } from '$app/navigation';
   
   const handleLogout = async () => {
@@ -17,11 +17,13 @@
     {#if !$loading}
       {#if $isAuthenticated && $user}
         <div class="flex items-center space-x-4">
-          <div class="avatar">
-            <div class="w-10 rounded-full bg-secondary text-white flex items-center justify-center">
-              {#if $user.name}
-                { $user.name.charAt(0).toUpperCase() }
-              {/if}
+          <div class="avatar placeholder">
+            <div class="bg-neutral text-neutral-content w-12 rounded-full">
+              <span class="">
+                {#if $user.name}
+                  { $user.name.charAt(0).toUpperCase() }
+                {/if}
+              </span>
             </div>
           </div>
           <span>{ $user.name }</span>
