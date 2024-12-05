@@ -42,6 +42,7 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const originalRequest = error.config as AxiosRequestConfig & { _retry?: boolean };
 
+    const currentPath = window.location.pathname;
     // If error response is 401 and the request hasn't been retried yet
     if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
       if (isRefreshing) {
@@ -80,7 +81,9 @@ api.interceptors.response.use(
           // If refresh fails, reject all queued requests and handle logout
           processQueue(err, undefined);
           // Optionally, redirect to login
-          window.location.href = '/login';
+          if (currentPath !== '/login') {
+            window.location.href = '/login';
+          }
           reject(err);
         } finally {
           isRefreshing = false;
