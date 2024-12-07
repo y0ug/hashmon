@@ -1,5 +1,5 @@
 import { writable } from 'svelte/store';
-import type { User } from '../models/User';
+import type { User } from '$lib/models/User';
 
 export const isAuthenticated = writable<boolean>(false);
 export const user = writable<User | null>(null);

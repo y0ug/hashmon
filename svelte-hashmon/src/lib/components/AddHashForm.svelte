@@ -1,18 +1,18 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  import { addHash } from '$lib/api';
-  import Notification from '$lib/components/Notification.svelte';
-  import type { NewHash } from '$lib/models/Hash';
+  import { createEventDispatcher } from "svelte";
+  import { addHash } from "$lib/api";
+  import Notification from "$lib/components/Notification.svelte";
+  import type { NewHash } from "$lib/models/Hash";
 
   const dispatch = createEventDispatcher();
 
   let formData: NewHash = {
-    sha256: '',
-    filename: '',
-    build_id: '',
+    sha256: "",
+    filename: "",
+    build_id: "",
   };
 
-  let notification = $state({ open: false, message: '', severity: 'success' });
+  let notification = $state({ open: false, message: "", severity: "success" });
 
   const handleChange = (e: Event) => {
     const target = e.target as HTMLInputElement;
@@ -23,7 +23,11 @@
     e.preventDefault();
 
     if (!formData.sha256 || !formData.filename) {
-      notification = { open: true, message: 'All fields are required.', severity: 'error' };
+      notification = {
+        open: true,
+        message: "All fields are required.",
+        severity: "error",
+      };
       return;
     }
 
@@ -31,12 +35,16 @@
 
     try {
       // await addHash(formData);
-      throw new Error('test notification')
-      formData = { sha256: '', filename: '', build_id: '' };
-      dispatch('hashAdded');
+      throw new Error("test notification");
+      formData = { sha256: "", filename: "", build_id: "" };
+      dispatch("hashAdded");
     } catch (error) {
       console.error(error);
-      notification = { open: true, message: 'Failed to add hash.', severity: 'error' };
+      notification = {
+        open: true,
+        message: "Failed to add hash.",
+        severity: "error",
+      };
     } finally {
       // loading.set(false);
     }
@@ -45,7 +53,7 @@
 
 <div>
   <h2 class="text-2xl mb-4">Add New Hash</h2>
-  <form onsubmit|preventDefault={handleSubmit} class="p-4 bg-base-200 rounded">
+  <form on:submit|preventDefault={handleSubmit} class="p-4 bg-base-200 rounded">
     <div class="mb-4">
       <label class="label">
         <span class="label-text">SHA256*</span>
@@ -80,15 +88,12 @@
         class="input input-bordered w-full"
       />
     </div>
-    <button
-      type="submit"
-      class="btn btn-primary"
-    >
+    <button type="submit" class="btn btn-primary">
       <!-- disabled={loading} -->
       <!-- {#if loading} -->
       <!--   Adding... -->
       <!-- {:else} -->
-        Add Hash
+      Add Hash
       <!-- {/if} -->
     </button>
   </form>
@@ -96,7 +101,10 @@
     <div class={`alert alert-${notification.severity}`}>
       <div>
         <span>{notification.message}</span>
-        <button class="btn btn-sm btn-ghost" on:click={() => notification.open = false}>✕</button>
+        <button
+          class="btn btn-sm btn-ghost"
+          on:click={() => (notification.open = false)}>✕</button
+        >
       </div>
     </div>
   {/if}

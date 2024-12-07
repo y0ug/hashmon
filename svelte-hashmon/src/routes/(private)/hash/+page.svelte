@@ -1,22 +1,26 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  import { deleteHash } from '$lib/api';
-  import type { HashStatus } from '$lib/models/Hash';
-  import ConfirmationDialog from '$lib/components/ConfirmationDialog.svelte';
-  import AddHashForm from '$lib/components/AddHashForm.svelte';
-  import Notification from '$lib/components/Notification.svelte';
+  import { createEventDispatcher } from "svelte";
+  import { deleteHash } from "$lib/api";
+  import type { HashesResponse, HashStatus } from "$lib/models/Hash";
+  import ConfirmationDialog from "$lib/components/ConfirmationDialog.svelte";
+  import AddHashForm from "$lib/components/AddHashForm.svelte";
+  import Notification from "$lib/components/Notification.svelte";
+  import type { PageData } from "./$types";
+  import { onMount } from "svelte";
+  import { getAllHashes } from "$lib/api";
+  import { writable } from "svelte/store";
 
-	let { data }: { data: PageData } = $props();
+  let { data }: { data: PageData } = $props();
   let hashes = data.hashes;
 
   const dispatch = createEventDispatcher();
 
   let dialogOpen = $state(false);
   let hashToDelete: HashStatus | null = $state(null);
-  let notification = $state({ open: false, message: '', severity: 'success' });
+  let notification = $state({ open: false, message: "", severity: "success" });
   let addDialogOpen = $state(false);
 
-   const handleDeleteClick = (hash: HashStatus) => {
+  const handleDeleteClick = (hash: HashStatus) => {
     hashToDelete = hash;
     dialogOpen = true;
   };
@@ -27,11 +31,19 @@
       await deleteHash(hashToDelete.sha256);
       // Remove the deleted hash from the list
       // hashes = hashes.filter(h => h.sha256 !== hashToDelete!.sha256);
-      dispatch('hashDeleted', hashToDelete.sha256);
-      notification = { open: true, message: 'Hash deleted successfully.', severity: 'success' };
+      dispatch("hashDeleted", hashToDelete.sha256);
+      notification = {
+        open: true,
+        message: "Hash deleted successfully.",
+        severity: "success",
+      };
     } catch (error) {
       console.error(error);
-      notification = { open: true, message: 'Failed to delete hash.', severity: 'error' };
+      notification = {
+        open: true,
+        message: "Failed to delete hash.",
+        severity: "error",
+      };
     } finally {
       dialogOpen = false;
       hashToDelete = null;
@@ -45,7 +57,11 @@
 
   const handleHashAdded = (event: CustomEvent<void>) => {
     addDialogOpen = false;
-    notification = { open: true, message: 'Hash added successfully.', severity: 'success' };
+    notification = {
+      open: true,
+      message: "Hash added successfully.",
+      severity: "success",
+    };
     // Optionally, refresh the hash list or append the new hash
     // For example, you can fetch the latest hashes from the server:
     // fetchHashes();
@@ -53,15 +69,15 @@
     // hashes = [...hashes, event.detail.newHash];
   };
 </script>
-<div class="container mx-auto p-4">
 
+<div class="container mx-auto p-4">
   <h2 class="text-2xl mb-4">Hash List</h2>
 
   <!-- Add Hash Button -->
-  <button class="btn btn-primary mb-4" onclick={() => addDialogOpen = true}>
+  <button class="btn btn-primary mb-4" onclick={() => (addDialogOpen = true)}>
     Add Hash
   </button>
-  {#if hashes.length === 0}
+  {#if hashes?.hashes.length === 0}
     <p>No hashes available.</p>
   {:else}
     <table class="table w-full">
@@ -76,20 +92,27 @@
         </tr>
       </thead>
       <tbody>
-        {#each hashes as hash}
-          <tr class={Object.values(hash.providers).some(p => p) ? 'bg-red-100' : ''}>
+        {#each hashes?.hashes as hash}
+          <tr
+            class={Object.values(hash.providers).some((p) => p)
+              ? "bg-red-100"
+              : ""}
+          >
             <td>
               <button class="btn btn-sm btn-primary mr-2">
                 <a href="/hash/{hash.sha256}">View</a>
               </button>
-              <button class="btn btn-sm btn-error" onclick={() => handleDeleteClick(hash)}>
+              <button
+                class="btn btn-sm btn-error"
+                onclick={() => handleDeleteClick(hash)}
+              >
                 Delete
               </button>
             </td>
             <td>{hash.filename}</td>
             <td>{hash.build_id}</td>
             <td>{new Date(hash.last_check_at).toLocaleString()}</td>
-            <td>{hash.alerted_by?.join(', ') || 'None'}</td>
+            <td>{hash.alerted_by?.join(", ") || "None"}</td>
             <td>{hash.sha256}</td>
           </tr>
         {/each}
@@ -116,7 +139,10 @@
       <div class="modal-box">
         <AddHashForm on:hashAdded={handleHashAdded} />
         <div class="modal-action">
-          <button class="btn btn-secondary" onclick={() => addDialogOpen = false}>
+          <button
+            class="btn btn-secondary"
+            onclick={() => (addDialogOpen = false)}
+          >
             Close
           </button>
         </div>
@@ -124,12 +150,8 @@
     </div>
   {/if}
 
-
   <!-- Notification -->
   {#if notification.open}
-    <Notification
-      {notification}
-      on:close={() => notification.open = false}
-    />
+    <Notification {notification} on:close={() => (notification.open = false)} />
   {/if}
 </div>

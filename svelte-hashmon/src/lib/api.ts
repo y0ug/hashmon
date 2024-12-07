@@ -1,149 +1,142 @@
-import axios, { AxiosError, type AxiosResponse, type AxiosRequestConfig } from 'axios';
-import { type HttpResp } from '$lib/models/HttpResp';
-import { type HashesResponse, type HashDetailResponse, type NewHash } from './models/Hash';
-import { type User } from '$lib/models/User';
+import type { HttpResp } from '$lib/models/HttpResp';
+import type { HashesResponse, HashDetailResponse, NewHash } from '$lib/models/Hash';
+import type { Provider } from '$lib/models/User';
+import { isAuthenticated } from './stores';
 
-// Set the base URL of your backend API
-const API_BASE_URL = 'http://127.0.0.1:8808'; // Adjust as needed
+// The base URL of your backend API
+const API_BASE_URL = 'http://127.0.0.1:8808';
 
-const api = axios.create({
-  baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-  withCredentials: true, // Include cookies in requests
-});
+// List of protected endpoints. If these return 401, we attempt refresh.
+const protectedEndpoints: string[] = [
+  '/api/hashes',
+  '/auth/status',
+  '/auth/logout'
+];
 
-// Flag to indicate if the token is being refreshed
 let isRefreshing = false;
+let refreshInProgress: Promise<void> | null = null;
 
-// Queue to hold pending requests while token is being refreshed
-let failedQueue: Array<{
-  resolve: (value: AxiosResponse<any, any>) => void;
-  reject: (error: any) => void;
-}> = [];
+/**
+ * Attempts to refresh the authentication tokens by calling `/auth/refresh`.
+ * If successful, resolves. If not, rejects.
+ */
+async function refreshToken(fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,): Promise<void> {
+  isRefreshing = true;
+  try {
+    const resp = await fetch(`${API_BASE_URL}/auth/refresh`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    const data: HttpResp<null> = await resp.json();
+    if (data.status === 'success') {
+      // Tokens refreshed
+      return;
+    } else {
+      // Refresh failed
+      isAuthenticated.set(false);
+      console.log('Failed to refresh token:', data.message);
+      // throw new Error(data.message || 'Failed to refresh token.');
+    }
+  } finally {
+    isRefreshing = false;
+  }
+}
 
-// Process the queue once token refresh is done
-const processQueue = (error: any, response?: AxiosResponse<any, any>) => {
-  failedQueue.forEach((prom) => {
-    if (error) {
-      prom.reject(error);
-    } else if (response) {
-      prom.resolve(response);
+/**
+ * A helper function to perform fetch requests and handle:
+ * - Protected endpoints 401 errors
+ * - Token refresh and request retry
+ */
+export async function apiFetch(
+  fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+  input: string,
+  init?: RequestInit & { _retry?: boolean }
+): Promise<Response> {
+  const url = input.startsWith('http') ? input : `${API_BASE_URL}${input}`;
+  const response = await fetch(url, {
+    ...init,
+    credentials: 'include', // Include cookies in requests
+    headers: {
+      'Content-Type': 'application/json',
+      ...(init?.headers || {})
     }
   });
 
-  failedQueue = [];
-};
+  if (response.status === 401 && !init?._retry) {
+    // Check if endpoint is protected
+    const endpoint = input.replace(API_BASE_URL, '');
+    const isProtected = protectedEndpoints.some((p) => endpoint.startsWith(p));
 
-// Response interceptor to handle 401 errors
-api.interceptors.response.use(
-  (response) => response,
-  async (error: AxiosError) => {
-    const originalRequest = error.config as AxiosRequestConfig & { _retry?: boolean };
-
-    const currentPath = window.location.pathname;
-    // If error response is 401 and the request hasn't been retried yet
-    if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
-      if (isRefreshing) {
-        // If a refresh is already in progress, queue the request
-        return new Promise<AxiosResponse<any>>((resolve, reject) => {
-          failedQueue.push({ resolve, reject });
-        })
-          .then((resp) => resp)
-          .catch((err) => Promise.reject(err));
+    if (isProtected) {
+      // If a refresh is already in progress, wait for it
+      if (isRefreshing && refreshInProgress) {
+        await refreshInProgress;
+      } else {
+        // Start refresh
+        try {
+          refreshInProgress = refreshToken(fetch);
+          await refreshInProgress;
+          refreshInProgress = null;
+        } catch (e) {
+          console.log('Failed to refresh token:', e);
+          isAuthenticated.set(false);
+        }
       }
 
-      originalRequest._retry = true;
-      isRefreshing = true;
-
-      return new Promise<AxiosResponse<any>>(async (resolve, reject) => {
-        try {
-          // Attempt to refresh the token
-          const response = await axios.post<HttpResp<null>>(
-            `${API_BASE_URL}/auth/refresh`,
-            {},
-            {
-              withCredentials: true, // Ensure cookies are sent
-            }
-          );
-
-          if (response.data.status === 'success') {
-            // Notify all queued requests to retry with the new token
-            processQueue(null, response);
-            resolve(api(originalRequest));
-          } else {
-            // If refresh failed, reject all queued requests
-            processQueue(new Error(response.data.message), undefined);
-            reject(new Error(response.data.message));
-          }
-        } catch (err) {
-          // If refresh fails, reject all queued requests and handle logout
-          processQueue(err, undefined);
-          // Optionally, redirect to login
-          if (currentPath !== '/login') {
-            // window.location.href = '/login';
-          }
-          reject(err);
-        } finally {
-          isRefreshing = false;
-        }
-      });
+      // After refresh, retry the request once
+      return apiFetch(fetch, input, { ...init, _retry: true });
     }
-
-    return Promise.reject(error);
   }
-);
 
-// Export the axios instance
-export default api;
+  return response;
+}
 
-// API Functions
+// Exported functions for API endpoints
 
-// Get all hashes
-export const getAllHashes = async (): Promise<HashesResponse> => {
-  const response = await api.get<HttpResp<HashesResponse>>('/api/hashes');
-  if (response.data.status === 'success' && response.data.data) {
-    return response.data.data;
-  } else {
-    throw new Error(response.data.message || 'Failed to fetch hashes.');
+export async function getAllHashes(): Promise<HashesResponse> {
+  const response = await apiFetch('/api/hashes', { method: 'GET' });
+  const data: HttpResp<HashesResponse> = await response.json();
+  if (data.status === 'success' && data.data) {
+    return data.data;
   }
-};
+  throw new Error(data.message || 'Failed to fetch hashes.');
+}
 
-// Get hash details
-export const getHashDetail = async (sha256: string): Promise<HashDetailResponse> => {
-  const response = await api.get<HttpResp<HashDetailResponse>>(`/api/hashes/${sha256}`);
-  if (response.data.status === 'success' && response.data.data) {
-    return response.data.data;
-  } else {
-    throw new Error(response.data.message || 'Failed to fetch hash details.');
+export async function getHashDetail(sha256: string): Promise<HashDetailResponse> {
+  const response = await apiFetch(`/api/hashes/${sha256}`, { method: 'GET' });
+  const data: HttpResp<HashDetailResponse> = await response.json();
+  if (data.status === 'success' && data.data) {
+    return data.data;
   }
-};
+  throw new Error(data.message || 'Failed to fetch hash details.');
+}
 
-// Add a new hash
-export const addHash = async (newHash: NewHash): Promise<NewHash> => {
-  const response = await api.put<HttpResp<NewHash>>('/api/hashes', newHash);
-  if (response.data.status === 'success' && response.data.data) {
-    return response.data.data;
-  } else {
-    throw new Error(response.data.message || 'Failed to add hash.');
+export async function addHash(newHash: NewHash): Promise<NewHash> {
+  const response = await apiFetch('/api/hashes', {
+    method: 'PUT',
+    body: JSON.stringify(newHash)
+  });
+  const data: HttpResp<NewHash> = await response.json();
+  if (data.status === 'success' && data.data) {
+    return data.data;
   }
-};
+  throw new Error(data.message || 'Failed to add hash.');
+}
 
-// Delete a hash
-export const deleteHash = async (sha256: string): Promise<void> => {
-  const response = await api.delete<HttpResp<null>>(`/api/hashes/${sha256}`);
-  if (response.data.status !== 'success') {
-    throw new Error(response.data.message || 'Failed to delete hash.');
+export async function deleteHash(sha256: string): Promise<void> {
+  const response = await apiFetch(`/api/hashes/${sha256}`, { method: 'DELETE' });
+  const data: HttpResp<null> = await response.json();
+  if (data.status !== 'success') {
+    throw new Error(data.message || 'Failed to delete hash.');
   }
-};
+}
 
-// Get User Info
-export const getUserInfo = async (): Promise<User> => {
-  const response = await api.get<HttpResp<User>>('/user');
-  if (response.data.status === 'success' && response.data.data) {
-    return response.data.data;
-  } else {
-    throw new Error(response.data.message || 'Failed to fetch user information.');
+export async function getAuthProviders(): Promise<Provider[]> {
+  const response = await apiFetch('/auth/providers', { method: 'GET' });
+  const data: HttpResp<Provider[]> = await response.json();
+  if (data.status === 'success' && data.data) {
+    return data.data;
   }
-};
+  throw new Error(data.message || 'Failed to fetch authentication providers.');
+}
