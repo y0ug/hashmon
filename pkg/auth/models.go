@@ -16,6 +16,7 @@ type Config struct {
 	SecureCookie           bool                          // Whether to use secure cookies
 	CookieSameSite         http.SameSite                 // SameSite attribute for cookies
 	Providers              map[string]providers.Provider // Map of provider instance
+	RedirectWhitelist      []string                      // Add a list of allowed redirect URLs
 }
 
 // HttpResp represents the standard HTTP response structure.

@@ -2,8 +2,10 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
@@ -68,12 +70,22 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		h.logAndRespondError(w, "HandleLogin", ErrProviderNotFound, http.StatusBadRequest)
 		return
 	}
+	// Extract the 'rd' parameter from the query, which indicates where to redirect afterwards
+	rd := r.URL.Query().Get("rd")
+	if rd == "" {
+		rd = "/auth/status" // default fallback if no redirect is provided
+	}
 
-	state := generateStateString()
+	// Generate a random state value for CSRF and include the encoded redirect URL
+	rawState := generateStateString()
+	encodedRD := base64.URLEncoding.EncodeToString([]byte(rd))
+	state := fmt.Sprintf("%s|%s", rawState, encodedRD)
+
 	h.Logger.WithFields(logrus.Fields{
 		"provider": providerName,
 		"state":    state,
-	}).Debug("Generated state for OAuth2 login")
+		"rd":       rd,
+	}).Debug("Generated state with redirect for OAuth2 login")
 
 	// TODO: Store 'state' in session for later validation
 
@@ -110,9 +122,42 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.Logger.WithField("code", code).Debug("Authorization code received")
+	// Extract and parse the state parameter
+	state := r.URL.Query().Get("state")
+	if state == "" {
+		h.Logger.Warn("State not found in the request")
+		h.logAndRespondError(w, "HandleCallback", fmt.Errorf("state not found"), http.StatusBadRequest)
+		return
+	}
 
-	// Exchange the code for tokens
+	parts := strings.SplitN(state, "|", 2)
+	if len(parts) < 2 {
+		h.logAndRespondError(w, "HandleCallback", fmt.Errorf("invalid state format"), http.StatusBadRequest)
+		return
+	}
+
+	// parts[0] is the random CSRF state (not used in this example, but could be verified if stored)
+	encodedRD := parts[1]
+	redirectURLBytes, err := base64.URLEncoding.DecodeString(encodedRD)
+	if err != nil {
+		h.logAndRespondError(w, "HandleCallback", fmt.Errorf("invalid redirect URL encoding: %w", err), http.StatusBadRequest)
+		return
+	}
+	redirectURL := string(redirectURLBytes)
+
+	// Validate the frontendRedirectURL against the whitelist
+	if !isWhitelistedURL(redirectURL, h.Config.RedirectWhitelist) {
+		h.Logger.WithFields(logrus.Fields{"redirect_url": redirectURL, "RedirectWhitelist": h.Config.RedirectWhitelist}).Error("Redirect URL not allowed")
+		h.logAndRespondError(w, "HandleCallback", fmt.Errorf("redirect URL not allowed"), http.StatusForbidden)
+		return
+	}
+
+	h.Logger.WithFields(logrus.Fields{
+		"code":  code,
+		"state": state,
+		"rd":    redirectURL,
+	}).Debug("Authorization code and redirect URL extracted from state") // Exchange the code for tokens
+
 	token, err := provider.ExchangeCode(ctx, code)
 	if err != nil {
 		h.Logger.WithError(err).Error("Token exchange failed")
@@ -191,9 +236,13 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	setAuthCookies(w, tokens, h.Config)
 	h.Logger.Debug("Auth cookies set successfully")
 
-	// Respond with tokens in the response body
-	WriteSuccessResponse(w, "Token exchange successful", tokens)
-	h.Logger.Info("User logged in successfully")
+	// // Respond with tokens in the response body
+	// WriteSuccessResponse(w, "Token exchange successful", tokens)
+	// h.Logger.Info("User logged in successfully")
+
+	// Redirect to the frontend URL now that we have authenticated and issued tokens
+	h.Logger.WithField("redirect_url", redirectURL).Info("Redirecting user after successful authentication")
+	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
 
 // HandleStatus checks authentication status and returns user info.

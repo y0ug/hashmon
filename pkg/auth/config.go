@@ -20,8 +20,7 @@ func NewConfig() (*Config, error) {
 
 	// Load AuthType with default
 	authConfig.AuthType = getEnv("AUTH_TYPE", "none")
-
-	if authConfig.AuthType == "oauth2" {
+	if authConfig.AuthType != "none" {
 		// Load common configurations
 		jwtSecret, err := getEnvBytes("JWT_SECRET")
 		if err != nil {
@@ -48,6 +47,13 @@ func NewConfig() (*Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("error parsing COOKIE_SAMESITE: %w", err)
 		}
+
+		redirectWhitelistStr := getEnv("REDIRECT_WHITELIST", "")
+		if redirectWhitelistStr != "" {
+			authConfig.RedirectWhitelist = strings.Split(redirectWhitelistStr, ",")
+		}
+	}
+	if authConfig.AuthType == "oauth2" {
 
 		// Load multiple providers
 		providersEnv := getEnv("OAUTH_PROVIDERS", "")

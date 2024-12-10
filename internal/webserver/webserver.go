@@ -28,7 +28,7 @@ func StartWebServer(ctx context.Context, ws *WebServer) (*http.Server, error) {
 
 	// Configure CORS options
 	corsOptions := cors.Options{
-		AllowedOrigins:   ws.config.CorsAllowedOrigins, // Adjust as needed
+		AllowedOrigins:   ws.config.CorsAllowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type", "Authorization"},
 		ExposedHeaders:   []string{"Content-Length"},

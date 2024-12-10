@@ -128,7 +128,8 @@ func setAuthCookies(w http.ResponseWriter, tokens *TokenResponse, config *Config
 		Expires:  refreshExpirationTime,
 		HttpOnly: true,
 		Secure:   config.SecureCookie,
-		Path:     "/auth/refresh",
+		Path:     "/",
+		// Path:     "/auth/refresh",
 		SameSite: config.CookieSameSite, // Adjust based on your needs
 	}
 	http.SetCookie(w, refreshCookie)
@@ -198,15 +199,15 @@ func WriteErrorResponseData(w http.ResponseWriter, message string, data interfac
 // extractToken extracts a token from the request headers or cookies.
 func extractToken(r *http.Request, tokenName string) string {
 	// Check the Authorization header for a Bearer token
-	if tokenName == "access_token" {
-		authHeader := r.Header.Get("Authorization")
-		if authHeader != "" {
-			parts := strings.SplitN(authHeader, " ", 2)
-			if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
-				return parts[1]
-			}
+	// if tokenName == "access_token" {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader != "" {
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
+			return parts[1]
 		}
 	}
+	// }
 
 	// Check for token in the cookie
 	cookie, err := r.Cookie(tokenName)
@@ -230,4 +231,18 @@ func getClientIP(r *http.Request) string {
 	// Fallback to RemoteAddr if X-Forwarded-For is not set
 	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 	return clientIP
+}
+
+func isWhitelistedURL(url string, whitelist []string) bool {
+	if len(whitelist) == 0 {
+		// If no whitelist is configured, deny all redirects except same domain if desired
+		return false
+	}
+
+	for _, allowed := range whitelist {
+		if strings.HasPrefix(url, allowed) {
+			return true
+		}
+	}
+	return false
 }
