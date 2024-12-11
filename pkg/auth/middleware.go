@@ -29,7 +29,7 @@ func NewMiddleware(config *Config, db Database, logger *logrus.Logger) *Middlewa
 // AuthMiddleware is the HTTP middleware for authentication.
 func (m *Middleware) AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		m.Logger.Debug("AuthMiddleware invoked")
+		// m.Logger.Debug("AuthMiddleware invoked")
 
 		// Extract access token
 		tokenString := extractToken(r, "access_token")
@@ -39,7 +39,7 @@ func (m *Middleware) AuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		m.Logger.WithField("access_token", tokenString).Debug("Access token extracted")
+		// m.Logger.WithField("access_token", tokenString).Debug("Access token extracted")
 
 		// Check if the token is blacklisted using request context
 		blacklisted, err := m.Database.IsTokenBlacklisted(r.Context(), tokenString)
@@ -93,10 +93,10 @@ func (m *Middleware) parseAndValidateToken(tokenString string) (jwt.MapClaims, e
 		return nil, fmt.Errorf("token has expired")
 	}
 
-	m.Logger.WithFields(logrus.Fields{
-		"user_id":  claims["sub"],
-		"provider": claims["provider"],
-	}).Debug("Token validated successfully")
-
+	// m.Logger.WithFields(logrus.Fields{
+	// 	"user_id":  claims["sub"],
+	// 	"provider": claims["provider"],
+	// }).Debug("Token validated successfully")
+	//
 	return claims, nil
 }

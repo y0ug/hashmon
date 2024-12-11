@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
@@ -91,6 +93,7 @@ func (ws *WebServer) InitRouter() *mux.Router {
 	}
 
 	// API routes
+	api.HandleFunc("/stats", ws.handleGetStats).Methods(http.MethodGet)
 	api.HandleFunc("/hashes", ws.handleGetHashes).Methods(http.MethodGet)
 	api.HandleFunc("/hashes/{sha256}", ws.handleGetHashDetail).Methods(http.MethodGet)
 	api.HandleFunc("/hashes", ws.handleAddHash).Methods(http.MethodPut)
@@ -105,10 +108,47 @@ func (ws *WebServer) InitRouter() *mux.Router {
 // handleGetHashes handles the GET /hashes endpoint.
 func (ws *WebServer) handleGetHashes(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	hashes := ws.Monitor.GetAllHashStatuses(ctx)
 
+	// Parse query parameters for pagination
+	query := r.URL.Query()
+	page, err := strconv.Atoi(query.Get("page"))
+	if err != nil || page < 1 {
+		page = 1 // Default to page 1
+	}
+	perPage, err := strconv.Atoi(query.Get("per_page"))
+	if err != nil || perPage < 1 {
+		perPage = 50 // Default to 50 items per page
+	}
+
+	// Parse 'found' query parameter for filtering
+	foundParam := strings.ToLower(query.Get("found"))
+	var filterFound *bool
+	if foundParam == "true" {
+		value := true
+		filterFound = &value
+	} else if foundParam == "false" {
+		value := false
+		filterFound = &value
+	}
+
+	// Fetch paginated hash statuses
+	hashes, total, err := ws.Monitor.LoadHashesPaginated(ctx, page, perPage, filterFound)
+	if err != nil {
+		ws.Logger.WithError(err).Error("Failed to load paginated hashes")
+		auth.WriteErrorResponse(w, "Failed to retrieve hashes", http.StatusInternalServerError)
+		return
+	}
+
+	// Calculate total pages
+	totalPages := (total + perPage - 1) / perPage
+
+	// Construct the response with pagination metadata
 	response := models.HashesResponse{
-		Hashes: hashes,
+		Hashes:     hashes,
+		Page:       page,
+		PerPage:    perPage,
+		Total:      total,
+		TotalPages: totalPages,
 	}
 
 	auth.WriteSuccessResponse(w, "Hashes retrieved successfully", response)
@@ -193,5 +233,28 @@ func (ws *WebServer) handleDeleteHash(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Respond with no content
-	w.WriteHeader(http.StatusNoContent)
+	auth.WriteSuccessResponse(w, "Hash deleted successfully", nil)
+}
+
+// handleGetStats handles the GET /api/stats endpoint.
+func (ws *WebServer) handleGetStats(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Fetch statistics from the Monitor
+	stats, err := ws.Monitor.GetStats(ctx)
+	if err != nil {
+		ws.Logger.WithError(err).Error("Failed to retrieve stats")
+		auth.WriteErrorResponse(w, "Failed to retrieve statistics", http.StatusInternalServerError)
+		return
+	}
+
+	// Construct the response
+	response := models.StatsResponse{
+		TotalHashes:       stats.TotalHashes,
+		GlobalLastCheckAt: stats.GlobalLastCheckAt,
+		TotalHashesFound:  stats.TotalHashesFound,
+		HashesFoundToday:  stats.HashesFoundToday,
+	}
+
+	auth.WriteSuccessResponse(w, "Statistics retrieved successfully", response)
 }

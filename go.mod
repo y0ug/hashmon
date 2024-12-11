@@ -5,14 +5,15 @@ go 1.23.3
 require (
 	github.com/containrrr/shoutrrr v0.8.0
 	github.com/go-redis/redis/v8 v8.11.5
-	github.com/golang-jwt/jwt v3.2.2+incompatible
 	github.com/golang-jwt/jwt/v4 v4.5.1
 	github.com/gorilla/mux v1.8.1
 	github.com/joho/godotenv v1.5.1
 	github.com/lestrrat-go/jwx v1.2.30
+	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/rs/cors v1.11.1
 	github.com/sirupsen/logrus v1.9.3
 	go.etcd.io/bbolt v1.3.11
+	golang.org/x/net v0.21.0
 	golang.org/x/oauth2 v0.6.0
 	golang.org/x/sync v0.9.0
 	golang.org/x/time v0.8.0
@@ -34,7 +35,6 @@ require (
 	github.com/mattn/go-isatty v0.0.17 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	golang.org/x/crypto v0.25.0 // indirect
-	golang.org/x/net v0.21.0 // indirect
 	golang.org/x/sys v0.22.0 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/protobuf v1.28.1 // indirect

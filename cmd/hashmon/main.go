@@ -66,20 +66,27 @@ func main() {
 	// Initialize Database
 	var db database.Database
 	switch dbConfig.Type {
-	case "bolt":
-		db, err = database.NewBoltDB(dbConfig)
+	case "sqlite":
+		db, err = database.NewSQLiteDB(dbConfig.Path, logger)
 		if err != nil {
-			logger.Fatalf("Failed to initialize BoltDB: %v", err)
+			logger.Fatalf("Failed to initialize SQlite: %v", err)
 		}
 		defer db.Close(ctx)
-		logger.Info("BoltDB initialized successfully")
-	case "redis":
-		db, err = database.NewRedisDB(dbConfig)
-		if err != nil {
-			logger.Fatalf("Failed to initialize RedisDB: %v", err)
-		}
-		defer db.Close(ctx)
-		logger.Info("RedisDB initialized successfully")
+		logger.Info("SQLite initialized successfully")
+		// case "bolt":
+	// 	db, err = database.NewBoltDB(dbConfig)
+	// 	if err != nil {
+	// 		logger.Fatalf("Failed to initialize BoltDB: %v", err)
+	// 	}
+	// 	defer db.Close(ctx)
+	// 	logger.Info("BoltDB initialized successfully")
+	// case "redis":
+	// 	db, err = database.NewRedisDB(dbConfig)
+	// 	if err != nil {
+	// 		logger.Fatalf("Failed to initialize RedisDB: %v", err)
+	// 	}
+	// 	defer db.Close(ctx)
+	// 	logger.Info("RedisDB initialized successfully")
 	default:
 		logger.Fatalf("Unsupported database type: %s", dbConfig.Type)
 	}
@@ -167,13 +174,7 @@ func main() {
 	monitor := hashmon.NewMonitor(monitorConfig, 5) // maxConcurrency is 5
 
 	// Check if hashes exist in the database; if not, import from file
-	hashCount, err := func() (int, error) {
-		hashes, err := db.LoadHashes(ctx)
-		if err != nil {
-			return 0, err
-		}
-		return len(hashes), nil
-	}()
+	hashCount, err := db.GetTotalHashes(ctx)
 	if err != nil {
 		logger.Fatalf("Failed to load hashes from database: %v", err)
 	}
@@ -188,12 +189,12 @@ func main() {
 		logger.WithField("hash_count", hashCount).Info("Loaded existing hashes from database")
 	}
 
-	// Load hashes into memory (if needed)
-	hashRecords, err := monitor.LoadHashes(ctx)
-	if err != nil {
-		logger.Fatalf("Failed to load hashes from database: %v", err)
-	}
-	logger.WithField("record_count", len(hashRecords)).Info("Hashes loaded successfully")
+	// // Load hashes into memory (if needed)
+	// hashRecords, err := monitor.LoadHashes(ctx)
+	// if err != nil {
+	// 	logger.Fatalf("Failed to load hashes from database: %v", err)
+	// }
+	// logger.WithField("record_count", len(hashRecords)).Info("Hashes loaded successfully")
 
 	webServerConfig, err := webserver.NewWebserverConfig()
 	if err != nil {

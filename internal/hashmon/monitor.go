@@ -26,44 +26,15 @@ type MonitorConfig struct {
 
 // Monitor handles the monitoring of hashes.
 type Monitor struct {
-	Config  MonitorConfig
-	alerted map[string]map[string]bool
-	mutex   sync.RWMutex
-	sem     *semaphore.Weighted
+	Config MonitorConfig
+	sem    *semaphore.Weighted
 }
 
 // NewMonitor initializes a new Monitor.
 func NewMonitor(config MonitorConfig, maxConcurrency int64) *Monitor {
-	ctx := context.TODO()
-	// Initialize alerted map from the database
-	alerted := make(map[string]map[string]bool)
-	hashes, err := config.Database.LoadHashes(ctx)
-	if err != nil {
-		logrus.Fatalf("Failed to load hashes from database: %v", err)
-	}
-
-	for _, record := range hashes {
-		// For each hash, check if it's alerted by any provider
-		for _, apiClient := range config.APIClients {
-			provider := apiClient.ProviderName()
-			alertedStatus, err := config.Database.IsAlerted(ctx, record.SHA256, provider)
-			if err != nil {
-				logrus.WithError(err).Errorf("Failed to check alerted status for hash %s and provider %s", record.SHA256, provider)
-				continue
-			}
-			if alertedStatus {
-				if alerted[record.SHA256] == nil {
-					alerted[record.SHA256] = make(map[string]bool)
-				}
-				alerted[record.SHA256][provider] = true
-			}
-		}
-	}
-
 	return &Monitor{
-		Config:  config,
-		alerted: alerted,
-		sem:     semaphore.NewWeighted(maxConcurrency),
+		Config: config,
+		sem:    semaphore.NewWeighted(maxConcurrency),
 	}
 }
 
@@ -92,9 +63,15 @@ func (m *Monitor) ImportHashesFromFile(ctx context.Context, filePath string) err
 	return nil
 }
 
-// LoadHashes loads all hash records from the database.
-func (m *Monitor) LoadHashes(ctx context.Context) ([]models.HashRecord, error) {
-	return m.Config.Database.LoadHashes(ctx)
+// LoadHashesPaginated retrieves a specific page of hash statuses along with the total count.
+// It accepts an optional filter to retrieve only found or not found hashes.
+func (m *Monitor) LoadHashesPaginated(ctx context.Context, page, perPage int, filterFound *bool) ([]models.HashStatus, int, error) {
+	hashStatuses, total, err := m.Config.Database.LoadHashesPaginated(ctx, page, perPage, filterFound)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to load paginated hashes: %w", err)
+	}
+
+	return hashStatuses, total, nil
 }
 
 // Start begins the monitoring process.
@@ -125,7 +102,7 @@ func (m *Monitor) checkAllHashes(ctx context.Context) {
 	var wg sync.WaitGroup
 
 	// Retrieve all hashes from the database
-	hashRecords, err := m.LoadHashes(ctx)
+	hashRecords, err := m.Config.Database.LoadHashes(ctx)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to load hashes for checking")
 		return
@@ -139,7 +116,7 @@ func (m *Monitor) checkAllHashes(ctx context.Context) {
 		}
 
 		wg.Add(1)
-		go func(rec models.HashRecord) {
+		go func(rec models.HashStatus) {
 			defer wg.Done()
 			defer m.sem.Release(1)
 			m.checkHash(ctx, rec)
@@ -150,7 +127,7 @@ func (m *Monitor) checkAllHashes(ctx context.Context) {
 }
 
 // checkHash checks a single hash across all APIs.
-func (m *Monitor) checkHash(ctx context.Context, record models.HashRecord) {
+func (m *Monitor) checkHash(ctx context.Context, record models.HashStatus) {
 	// Determine if the hash needs to be checked based on LastCheckAt
 	if !record.LastCheckAt.IsZero() && time.Since(record.LastCheckAt) < m.Config.CheckInterval {
 		logrus.WithFields(logrus.Fields{
@@ -165,12 +142,10 @@ func (m *Monitor) checkHash(ctx context.Context, record models.HashRecord) {
 
 		provider := apiClient.ProviderName()
 
-		m.mutex.RLock()
-		if m.alerted[record.SHA256] != nil && m.alerted[record.SHA256][provider] && !record.LastCheckAt.IsZero() {
-			m.mutex.RUnlock()
-			continue // Already alerted for this provider
+		isAlerted, exists := record.Providers[provider]
+		if exists && isAlerted && !record.LastCheckAt.IsZero() {
+			continue
 		}
-		m.mutex.RUnlock()
 
 		logger := logrus.WithFields(logrus.Fields{
 			"sha256":   record.SHA256,
@@ -193,14 +168,6 @@ func (m *Monitor) checkHash(ctx context.Context, record models.HashRecord) {
 				record.SHA256, provider, record.FileName)
 			m.Config.Notifier.Send("Hash Found", message)
 
-			// Mark as alerted
-			m.mutex.Lock()
-			if m.alerted[record.SHA256] == nil {
-				m.alerted[record.SHA256] = make(map[string]bool)
-			}
-			m.alerted[record.SHA256][provider] = true
-			m.mutex.Unlock()
-
 			// Persist to DB
 			err = m.Config.Database.MarkAsAlerted(ctx, record.SHA256, provider)
 			if err != nil {
@@ -213,34 +180,11 @@ func (m *Monitor) checkHash(ctx context.Context, record models.HashRecord) {
 		record.LastCheckAt = now
 
 		// Persist the updated HashRecord back to the database
-		err = m.Config.Database.UpdateHash(ctx, record)
+		err = m.Config.Database.UpdateHash(ctx, record.SHA256, record.ToHashRecord())
 		if err != nil {
 			logrus.WithError(err).Error("Failed to update database with LastCheckAt")
 		}
 	}
-}
-
-// GetAllHashStatuses retrieves the status of all hashes.
-func (m *Monitor) GetAllHashStatuses(ctx context.Context) []models.HashStatus {
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
-
-	var statuses []models.HashStatus
-	hashRecords, err := m.LoadHashes(ctx)
-	if err != nil {
-		logrus.WithError(err).Error("Failed to load hashes for status retrieval")
-		return statuses
-	}
-
-	for _, record := range hashRecords {
-		status, err := m.GetHashStatus(ctx, record.SHA256)
-		if err != nil {
-			logrus.WithError(err).Error("Failed to find hash")
-			continue
-		}
-		statuses = append(statuses, status)
-	}
-	return statuses
 }
 
 func (m *Monitor) GetHashStatus(ctx context.Context, sha256 string) (models.HashStatus, error) {
@@ -248,28 +192,40 @@ func (m *Monitor) GetHashStatus(ctx context.Context, sha256 string) (models.Hash
 	if err != nil {
 		return models.HashStatus{}, err
 	}
+	return hash, nil
+}
 
-	providersStatus := make(map[string]bool)
-	alertedBy := []string{}
-	for _, apiClient := range m.Config.APIClients {
-		provider := apiClient.ProviderName()
-		alerted, err := m.Config.Database.IsAlerted(ctx, sha256, provider)
-		if err != nil {
-			logrus.WithError(err).Warnf("Failed to get alerted status for hash %s and provider %s", sha256, provider)
-			continue
-		}
-		providersStatus[provider] = alerted
-		if alerted {
-			alertedBy = append(alertedBy, provider)
-		}
+// GetStats retrieves the current statistics from the database.
+func (m *Monitor) GetStats(ctx context.Context) (models.StatsResponse, error) {
+	var stats models.StatsResponse
+
+	// Get Total Hashes
+	totalHashes, err := m.Config.Database.GetTotalHashes(ctx)
+	if err != nil {
+		return stats, fmt.Errorf("failed to get total hashes: %w", err)
 	}
+	stats.TotalHashes = totalHashes
 
-	return models.HashStatus{
-		FileName:    hash.FileName,
-		BuildId:     hash.BuildId,
-		LastCheckAt: hash.LastCheckAt,
-		SHA256:      hash.SHA256,
-		Providers:   providersStatus,
-		AlertedBy:   alertedBy,
-	}, nil
+	// Get Global Last Check Time
+	globalLastCheckAt, err := m.Config.Database.GetGlobalLastCheckAt(ctx)
+	if err != nil {
+		return stats, fmt.Errorf("failed to get global last check time: %w", err)
+	}
+	stats.GlobalLastCheckAt = globalLastCheckAt
+
+	// Get Total Hashes Found
+	totalHashesFound, err := m.Config.Database.GetTotalHashesFound(ctx)
+	if err != nil {
+		return stats, fmt.Errorf("failed to get total hashes found: %w", err)
+	}
+	stats.TotalHashesFound = totalHashesFound
+
+	// Get Hashes Found Today
+	hashesFoundToday, err := m.Config.Database.GetHashesFoundToday(ctx)
+	if err != nil {
+		return stats, fmt.Errorf("failed to get hashes found today: %w", err)
+	}
+	stats.HashesFoundToday = hashesFoundToday
+
+	return stats, nil
 }

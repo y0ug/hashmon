@@ -27,6 +27,11 @@ func LoadDatabaseConfig() (*DatabaseConfig, error) {
 	}
 
 	switch dbType {
+	case "sqlite":
+		config.Path = os.Getenv("DATABASE_PATH")
+		if config.Path == "" {
+			return nil, fmt.Errorf("DATABASE_PATH is required for sqlite")
+		}
 	case "bolt":
 		config.Path = os.Getenv("DATABASE_PATH")
 		if config.Path == "" {
