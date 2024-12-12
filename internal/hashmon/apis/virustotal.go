@@ -1,4 +1,3 @@
-// apis/virustotal.go
 package apis
 
 import (

@@ -20,18 +20,16 @@ func ReadCSV(filePath string) ([]models.HashRecord, error) {
 	reader := csv.NewReader(file)
 	reader.TrimLeadingSpace = true
 
-	// No header
-	// Read the header
+	// Expected header: comment,hash
 	// header, err := reader.Read()
 	// if err != nil {
 	// 	return nil, fmt.Errorf("failed to read CSV header: %v", err)
 	// }
 	//
-	// // Validate header
-	// if len(header) < 1 || header[0] != "sha256" {
-	// 	return nil, fmt.Errorf("invalid CSV header, expected 'sha256'")
+	// if len(header) < 2 || strings.ToLower(header[0]) != "comment" || strings.ToLower(header[1]) != "hash" {
+	// 	return nil, fmt.Errorf("invalid CSV header, expected 'comment,hash'")
 	// }
-	//
+
 	var records []models.HashRecord
 
 	// Read the rest of the records
@@ -43,14 +41,21 @@ func ReadCSV(filePath string) ([]models.HashRecord, error) {
 		if err != nil {
 			return nil, fmt.Errorf("error reading CSV: %v", err)
 		}
-		if len(record) < 1 {
+		if len(record) < 2 {
 			continue // Skip invalid records
 		}
 
 		hashRecord := models.HashRecord{
-			FileName: record[0],
-			SHA256:   record[1],
-			BuildId:  record[2],
+			Comment: record[0],
+			Hash:    record[1],
+			// LastCheckAt will be set to zero value; can be updated later
+		}
+
+		// Validate the hash
+		if err := hashRecord.ValidateHash(); err != nil {
+			// Log the error and skip the record
+			fmt.Printf("Invalid hash format for record %+v: %v\n", hashRecord, err)
+			continue
 		}
 
 		records = append(records, hashRecord)

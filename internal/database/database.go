@@ -11,7 +11,7 @@ import (
 
 // Database defines the methods required for hash storage and retrieval.
 type Database interface {
-	// Initialize sets up the necessary buckets or tables.
+	// Initialize sets up the necessary tables.
 	Initialize(ctx context.Context) error
 
 	Close(ctx context.Context) error
@@ -20,13 +20,13 @@ type Database interface {
 	AddHash(ctx context.Context, record models.HashRecord) error
 
 	// UpdateHash updates an existing hash record.
-	UpdateHash(ctx context.Context, sha256 string, record models.HashRecord) error
+	UpdateHash(ctx context.Context, hash string, record models.HashRecord) error
 
 	// DeleteHash removes a hash record.
-	DeleteHash(ctx context.Context, sha256 string) error
+	DeleteHash(ctx context.Context, hash string) error
 
 	// GetHash retrieves a specific hash record.
-	GetHash(ctx context.Context, sha256 string) (models.HashStatus, error)
+	GetHash(ctx context.Context, hash string) (models.HashStatus, error)
 
 	LoadHashes(ctx context.Context) ([]models.HashStatus, error)
 	// LoadHashesPaginated retrieves a specific page of hash records and the total count.
@@ -36,7 +36,7 @@ type Database interface {
 	LoadHashesPaginated(ctx context.Context, page, perPage int, filterFound *bool) ([]models.HashStatus, int, error)
 
 	// MarkAsAlerted marks a hash as alerted for a specific provider.
-	MarkAsAlerted(ctx context.Context, sha256, provider string) error
+	MarkAsAlerted(ctx context.Context, hash, provider string) error
 
 	// AddBlacklistedToken adds a token string to the blacklist with its expiration time.
 	AddBlacklistedToken(ctx context.Context, tokenString string, exp int64) error

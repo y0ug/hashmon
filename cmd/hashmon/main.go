@@ -189,13 +189,6 @@ func main() {
 		logger.WithField("hash_count", hashCount).Info("Loaded existing hashes from database")
 	}
 
-	// // Load hashes into memory (if needed)
-	// hashRecords, err := monitor.LoadHashes(ctx)
-	// if err != nil {
-	// 	logger.Fatalf("Failed to load hashes from database: %v", err)
-	// }
-	// logger.WithField("record_count", len(hashRecords)).Info("Hashes loaded successfully")
-
 	webServerConfig, err := webserver.NewWebserverConfig()
 	if err != nil {
 		logger.Fatalf("Failed to load webserver configuration: %v", err)

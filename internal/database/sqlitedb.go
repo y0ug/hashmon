@@ -13,6 +13,7 @@ import (
 	"github.com/y0ug/hashmon/pkg/auth"
 )
 
+// SQLiteDB represents the SQLite implementation of the Database interface.
 type SQLiteDB struct {
 	db     *sql.DB
 	logger *logrus.Logger
@@ -45,22 +46,21 @@ func (s *SQLiteDB) Close(context.Context) error {
 	return s.db.Close()
 }
 
-// initializeSchema creates the necessary tables and indexes.
+// Initialize creates the necessary tables and indexes.
 func (s *SQLiteDB) Initialize(ctx context.Context) error {
 	schema := `
     CREATE TABLE IF NOT EXISTS hashes (
-        sha256 TEXT PRIMARY KEY,
-        file_name TEXT NOT NULL,
-        build_id TEXT NOT NULL,
+        hash TEXT PRIMARY KEY,
+        comment TEXT NOT NULL,
         last_check_at DATETIME NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS alerted_hashes (
-        sha256 TEXT NOT NULL,
+        hash TEXT NOT NULL,
         provider TEXT NOT NULL,
         alerted_at DATETIME NOT NULL,
-        PRIMARY KEY (sha256, provider),
-        FOREIGN KEY (sha256) REFERENCES hashes(sha256) ON DELETE CASCADE
+        PRIMARY KEY (hash, provider),
+        FOREIGN KEY (hash) REFERENCES hashes(hash) ON DELETE CASCADE
     );
 
     CREATE INDEX IF NOT EXISTS idx_alerted_hashes_alerted_at ON alerted_hashes(alerted_at);
@@ -103,40 +103,39 @@ func (s *SQLiteDB) Initialize(ctx context.Context) error {
 	return nil
 }
 
-// GetHash retrieves a single hash record by its SHA256.
-func (s *SQLiteDB) GetHash(ctx context.Context, sha256 string) (models.HashStatus, error) {
+// GetHash retrieves a single hash record by its Hash.
+func (s *SQLiteDB) GetHash(ctx context.Context, hash string) (models.HashStatus, error) {
 	var hashStatus models.HashStatus
 
 	query := `
-		SELECT h.sha256, h.file_name, h.build_id, h.last_check_at, GROUP_CONCAT(a.provider) as alerted_by
+		SELECT h.hash, h.comment, h.last_check_at, GROUP_CONCAT(a.provider) as alerted_by
 		FROM hashes h
-		LEFT JOIN alerted_hashes a ON h.sha256 = a.sha256
-		WHERE h.sha256 = ?
-		GROUP BY h.sha256;
+		LEFT JOIN alerted_hashes a ON h.hash = a.hash
+		WHERE h.hash = ?
+		GROUP BY h.hash;
 	`
 
 	var lastCheckAtStr string
 	var alertedBy sql.NullString
 
-	err := s.db.QueryRowContext(ctx, query, sha256).Scan(
-		&hashStatus.SHA256,
-		&hashStatus.FileName,
-		&hashStatus.BuildId,
+	err := s.db.QueryRowContext(ctx, query, hash).Scan(
+		&hashStatus.Hash,
+		&hashStatus.Comment,
 		&lastCheckAtStr,
 		&alertedBy,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return hashStatus, fmt.Errorf("hash with SHA256 %s not found", sha256)
+			return hashStatus, fmt.Errorf("hash with Hash %s not found", hash)
 		}
-		s.logger.WithError(err).Errorf("GetHash: failed to retrieve hash %s", sha256)
+		s.logger.WithError(err).Errorf("GetHash: failed to retrieve hash %s", hash)
 		return hashStatus, err
 	}
 
 	lastCheckAt, err := time.Parse(time.RFC3339, lastCheckAtStr)
 	if err != nil {
-		s.logger.WithError(err).Warnf("GetHash: invalid time format for hash %s", sha256)
-		return hashStatus, fmt.Errorf("invalid time format for hash %s", sha256)
+		s.logger.WithError(err).Warnf("GetHash: invalid time format for hash %s", hash)
+		return hashStatus, fmt.Errorf("invalid time format for hash %s", hash)
 	}
 
 	hashStatus.LastCheckAt = lastCheckAt
@@ -159,34 +158,34 @@ func (s *SQLiteDB) LoadHashes(ctx context.Context) ([]models.HashStatus, error) 
 	var records []models.HashStatus
 
 	var query string = `
-            SELECT h.sha256, h.file_name, h.build_id, h.last_check_at, GROUP_CONCAT(a.provider) as alerted_by
+            SELECT h.hash, h.comment, h.last_check_at, GROUP_CONCAT(a.provider) as alerted_by
             FROM hashes h
-            LEFT JOIN alerted_hashes a ON h.sha256 = a.sha256
-            GROUP BY h.sha256
+            LEFT JOIN alerted_hashes a ON h.hash = a.hash
+            GROUP BY h.hash
             ORDER BY h.last_check_at DESC;
         `
 
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
-		s.logger.WithError(err).Error("LoadHashesPaginated: failed to execute query")
+		s.logger.WithError(err).Error("LoadHashes: failed to execute query")
 		return nil, err
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var sha256, fileName, buildId string
+		var hash, comment string
 		var lastCheckAtStr string
 		var alertedBy sql.NullString
 
-		err := rows.Scan(&sha256, &fileName, &buildId, &lastCheckAtStr, &alertedBy)
+		err := rows.Scan(&hash, &comment, &lastCheckAtStr, &alertedBy)
 		if err != nil {
-			s.logger.WithError(err).Warn("LoadHashesPaginated: failed to scan row")
+			s.logger.WithError(err).Warn("LoadHashes: failed to scan row")
 			continue
 		}
 
 		lastCheckAt, err := time.Parse(time.RFC3339, lastCheckAtStr)
 		if err != nil {
-			s.logger.WithError(err).Warnf("LoadHashesPaginated: invalid time format for hash %s", sha256)
+			s.logger.WithError(err).Warnf("LoadHashes: invalid time format for hash %s", hash)
 			continue
 		}
 
@@ -201,9 +200,8 @@ func (s *SQLiteDB) LoadHashes(ctx context.Context) ([]models.HashStatus, error) 
 		}
 
 		hashStatus := models.HashStatus{
-			SHA256:      sha256,
-			FileName:    fileName,
-			BuildId:     buildId,
+			Hash:        hash,
+			Comment:     comment,
 			LastCheckAt: lastCheckAt,
 			Providers:   providers,
 			AlertedBy:   alertedBySlice,
@@ -213,7 +211,7 @@ func (s *SQLiteDB) LoadHashes(ctx context.Context) ([]models.HashStatus, error) 
 	}
 
 	if err := rows.Err(); err != nil {
-		s.logger.WithError(err).Error("LoadHashesPaginated: row iteration error")
+		s.logger.WithError(err).Error("LoadHashes: row iteration error")
 		return nil, err
 	}
 	return records, nil
@@ -235,10 +233,10 @@ func (s *SQLiteDB) LoadHashesPaginated(ctx context.Context, page, perPage int, f
 		if *filterFound {
 			// Only hashes that have been found (exist in alerted_hashes)
 			query = `
-                SELECT h.sha256, h.file_name, h.build_id, h.last_check_at, GROUP_CONCAT(a.provider) as alerted_by
+                SELECT h.hash, h.comment, h.last_check_at, GROUP_CONCAT(a.provider) as alerted_by
                 FROM hashes h
-                JOIN alerted_hashes a ON h.sha256 = a.sha256
-                GROUP BY h.sha256
+                JOIN alerted_hashes a ON h.hash = a.hash
+                GROUP BY h.hash
                 ORDER BY h.last_check_at DESC
                 LIMIT ? OFFSET ?;
             `
@@ -246,10 +244,10 @@ func (s *SQLiteDB) LoadHashesPaginated(ctx context.Context, page, perPage int, f
 		} else {
 			// Only hashes that have NOT been found (not exist in alerted_hashes)
 			query = `
-                SELECT h.sha256, h.file_name, h.build_id, h.last_check_at, NULL as alerted_by
+                SELECT h.hash, h.comment, h.last_check_at, NULL as alerted_by
                 FROM hashes h
-                LEFT JOIN alerted_hashes a ON h.sha256 = a.sha256
-                WHERE a.sha256 IS NULL
+                LEFT JOIN alerted_hashes a ON h.hash = a.hash
+                WHERE a.hash IS NULL
                 ORDER BY h.last_check_at DESC
                 LIMIT ? OFFSET ?;
             `
@@ -258,10 +256,10 @@ func (s *SQLiteDB) LoadHashesPaginated(ctx context.Context, page, perPage int, f
 	} else {
 		// No filter; retrieve all hashes
 		query = `
-            SELECT h.sha256, h.file_name, h.build_id, h.last_check_at, GROUP_CONCAT(a.provider) as alerted_by
+            SELECT h.hash, h.comment, h.last_check_at, GROUP_CONCAT(a.provider) as alerted_by
             FROM hashes h
-            LEFT JOIN alerted_hashes a ON h.sha256 = a.sha256
-            GROUP BY h.sha256
+            LEFT JOIN alerted_hashes a ON h.hash = a.hash
+            GROUP BY h.hash
             ORDER BY h.last_check_at DESC
             LIMIT ? OFFSET ?;
         `
@@ -276,11 +274,11 @@ func (s *SQLiteDB) LoadHashesPaginated(ctx context.Context, page, perPage int, f
 	defer rows.Close()
 
 	for rows.Next() {
-		var sha256, fileName, buildId string
+		var hash, comment string
 		var lastCheckAtStr string
 		var alertedBy sql.NullString
 
-		err := rows.Scan(&sha256, &fileName, &buildId, &lastCheckAtStr, &alertedBy)
+		err := rows.Scan(&hash, &comment, &lastCheckAtStr, &alertedBy)
 		if err != nil {
 			s.logger.WithError(err).Warn("LoadHashesPaginated: failed to scan row")
 			continue
@@ -288,7 +286,7 @@ func (s *SQLiteDB) LoadHashesPaginated(ctx context.Context, page, perPage int, f
 
 		lastCheckAt, err := time.Parse(time.RFC3339, lastCheckAtStr)
 		if err != nil {
-			s.logger.WithError(err).Warnf("LoadHashesPaginated: invalid time format for hash %s", sha256)
+			s.logger.WithError(err).Warnf("LoadHashesPaginated: invalid time format for hash %s", hash)
 			continue
 		}
 
@@ -303,9 +301,8 @@ func (s *SQLiteDB) LoadHashesPaginated(ctx context.Context, page, perPage int, f
 		}
 
 		hashStatus := models.HashStatus{
-			SHA256:      sha256,
-			FileName:    fileName,
-			BuildId:     buildId,
+			Hash:        hash,
+			Comment:     comment,
 			LastCheckAt: lastCheckAt,
 			Providers:   providers,
 			AlertedBy:   alertedBySlice,
@@ -324,16 +321,16 @@ func (s *SQLiteDB) LoadHashesPaginated(ctx context.Context, page, perPage int, f
 	if filterFound != nil {
 		if *filterFound {
 			countQuery = `
-                SELECT COUNT(DISTINCT h.sha256)
+                SELECT COUNT(DISTINCT h.hash)
                 FROM hashes h
-                JOIN alerted_hashes a ON h.sha256 = a.sha256;
+                JOIN alerted_hashes a ON h.hash = a.hash;
             `
 		} else {
 			countQuery = `
                 SELECT COUNT(*)
                 FROM hashes h
-                LEFT JOIN alerted_hashes a ON h.sha256 = a.sha256
-                WHERE a.sha256 IS NULL;
+                LEFT JOIN alerted_hashes a ON h.hash = a.hash
+                WHERE a.hash IS NULL;
             `
 		}
 	} else {
@@ -352,18 +349,17 @@ func (s *SQLiteDB) LoadHashesPaginated(ctx context.Context, page, perPage int, f
 	return records, total, nil
 }
 
-// GetTotalHashes retrieves the total number of hashes based on the filter.
+// GetTotalHashes retrieves the total number of hashes.
 func (s *SQLiteDB) GetTotalHashes(ctx context.Context) (int, error) {
 	var total int
 	var query string
-	var args []interface{}
 
 	query = `
             SELECT COUNT(*)
             FROM hashes;
         `
 
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(&total)
+	err := s.db.QueryRowContext(ctx, query).Scan(&total)
 	if err != nil {
 		s.logger.WithError(err).Error("GetTotalHashes: failed to execute query")
 		return 0, err
@@ -372,11 +368,10 @@ func (s *SQLiteDB) GetTotalHashes(ctx context.Context) (int, error) {
 	return total, nil
 }
 
-// GetGlobalLastCheckAt retrieves the most recent LastCheckAt timestamp based on the filter.
+// GetGlobalLastCheckAt retrieves the most recent LastCheckAt timestamp.
 func (s *SQLiteDB) GetGlobalLastCheckAt(ctx context.Context) (time.Time, error) {
 	var latestStr string
 	var query string
-	var args []interface{}
 
 	// Latest check among all hashes
 	query = `
@@ -384,7 +379,7 @@ func (s *SQLiteDB) GetGlobalLastCheckAt(ctx context.Context) (time.Time, error) 
             FROM hashes;
         `
 
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(&latestStr)
+	err := s.db.QueryRowContext(ctx, query).Scan(&latestStr)
 	if err != nil {
 		s.logger.WithError(err).Error("GetGlobalLastCheckAt: failed to execute query")
 		return time.Time{}, err
@@ -403,11 +398,11 @@ func (s *SQLiteDB) GetGlobalLastCheckAt(ctx context.Context) (time.Time, error) 
 	return latest, nil
 }
 
-// GetTotalHashesFound retrieves the total number of hashes found based on the filter.
+// GetTotalHashesFound retrieves the total number of hashes found.
 func (s *SQLiteDB) GetTotalHashesFound(ctx context.Context) (int, error) {
 	var total int
 	query := `
-        SELECT COUNT(DISTINCT sha256)
+        SELECT COUNT(DISTINCT hash)
         FROM alerted_hashes;
     `
 	err := s.db.QueryRowContext(ctx, query).Scan(&total)
@@ -418,23 +413,17 @@ func (s *SQLiteDB) GetTotalHashesFound(ctx context.Context) (int, error) {
 	return total, nil
 }
 
-// GetHashesFoundToday retrieves the number of hashes found within the last 24 hours based on the filter.
+// GetHashesFoundToday retrieves the number of hashes found within the last 24 hours.
 func (s *SQLiteDB) GetHashesFoundToday(ctx context.Context) (int, error) {
 	cutoffTime := time.Now().Add(-24 * time.Hour).Format(time.RFC3339)
 
 	var count int
-	var query string
-	var args []interface{}
-
-	// Count of found hashes within last 24 hours
-	query = `
+	query := `
             SELECT COUNT(*)
             FROM alerted_hashes
             WHERE alerted_at >= ?;
         `
-	args = append(args, cutoffTime)
-
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(&count)
+	err := s.db.QueryRowContext(ctx, query, cutoffTime).Scan(&count)
 	if err != nil {
 		s.logger.WithError(err).Error("GetHashesFoundToday: failed to execute query")
 		return 0, err
@@ -443,51 +432,56 @@ func (s *SQLiteDB) GetHashesFoundToday(ctx context.Context) (int, error) {
 	return count, nil
 }
 
-// AddHash adds a new hash record to the database.
+// AddHash adds a new hash record to the database after validation.
 func (s *SQLiteDB) AddHash(ctx context.Context, record models.HashRecord) error {
+	// Validate the hash
+	if err := record.ValidateHash(); err != nil {
+		s.logger.WithError(err).Warnf("AddHash: invalid hash format for %s", record.Hash)
+		return err
+	}
+
 	query := `
-        INSERT INTO hashes (sha256, file_name, build_id, last_check_at)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(sha256) DO UPDATE SET
-            file_name=excluded.file_name,
-            build_id=excluded.build_id,
+        INSERT INTO hashes (hash, comment, last_check_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(hash) DO UPDATE SET
+            comment=excluded.comment,
             last_check_at=excluded.last_check_at;
     `
-	_, err := s.db.ExecContext(ctx, query, record.SHA256, record.FileName, record.BuildId, record.LastCheckAt.Format(time.RFC3339))
+	_, err := s.db.ExecContext(ctx, query, record.Hash, record.Comment, record.LastCheckAt.Format(time.RFC3339))
 	if err != nil {
-		s.logger.WithError(err).Errorf("AddHash: failed to insert/update hash %s", record.SHA256)
+		s.logger.WithError(err).Errorf("AddHash: failed to insert/update hash %s", record.Hash)
 		return err
 	}
 	return nil
 }
 
 // DeleteHash removes a hash record and its associated alerts from the database.
-func (s *SQLiteDB) DeleteHash(ctx context.Context, sha256 string) error {
+func (s *SQLiteDB) DeleteHash(ctx context.Context, hash string) error {
 	query := `
         DELETE FROM hashes
-        WHERE sha256 = ?;
+        WHERE hash = ?;
     `
-	_, err := s.db.ExecContext(ctx, query, sha256)
+	_, err := s.db.ExecContext(ctx, query, hash)
 	if err != nil {
-		s.logger.WithError(err).Errorf("DeleteHash: failed to delete hash %s", sha256)
+		s.logger.WithError(err).Errorf("DeleteHash: failed to delete hash %s", hash)
 		return err
 	}
 	return nil
 }
 
 // MarkAsAlerted marks a hash as alerted by a specific provider with the current timestamp.
-func (s *SQLiteDB) MarkAsAlerted(ctx context.Context, sha256, provider string) error {
+func (s *SQLiteDB) MarkAsAlerted(ctx context.Context, hash, provider string) error {
 	currentTime := time.Now().Format(time.RFC3339)
 
 	query := `
-        INSERT INTO alerted_hashes (sha256, provider, alerted_at)
+        INSERT INTO alerted_hashes (hash, provider, alerted_at)
         VALUES (?, ?, ?)
-        ON CONFLICT(sha256, provider) DO UPDATE SET
+        ON CONFLICT(hash, provider) DO UPDATE SET
             alerted_at=excluded.alerted_at;
     `
-	_, err := s.db.ExecContext(ctx, query, sha256, provider, currentTime)
+	_, err := s.db.ExecContext(ctx, query, hash, provider, currentTime)
 	if err != nil {
-		s.logger.WithError(err).Errorf("MarkAsAlerted: failed to insert/update alert for hash %s by provider %s", sha256, provider)
+		s.logger.WithError(err).Errorf("MarkAsAlerted: failed to insert/update alert for hash %s by provider %s", hash, provider)
 		return err
 	}
 	return nil
@@ -692,19 +686,23 @@ func (s *SQLiteDB) UpdateProviderTokens(ctx context.Context, userID string, prov
 	return s.StoreProviderTokens(ctx, userID, provider, tokens)
 }
 
-// UpdateHash updates specific fields of a hash record identified by its SHA256.
-func (s *SQLiteDB) UpdateHash(ctx context.Context, sha256 string, updatedFields models.HashRecord) error {
+// UpdateHash updates specific fields of a hash record identified by its Hash.
+func (s *SQLiteDB) UpdateHash(ctx context.Context, hash string, updatedFields models.HashRecord) error {
+	// Validate the hash if it's being updated
+	if updatedFields.Hash != "" && updatedFields.Hash != hash {
+		if err := updatedFields.ValidateHash(); err != nil {
+			s.logger.WithError(err).Warnf("UpdateHash: invalid hash format for %s", updatedFields.Hash)
+			return err
+		}
+	}
+
 	// Build the SET clause dynamically based on non-zero fields
 	setClauses := []string{}
 	args := []interface{}{}
 
-	if updatedFields.FileName != "" {
-		setClauses = append(setClauses, "file_name = ?")
-		args = append(args, updatedFields.FileName)
-	}
-	if updatedFields.BuildId != "" {
-		setClauses = append(setClauses, "build_id = ?")
-		args = append(args, updatedFields.BuildId)
+	if updatedFields.Comment != "" {
+		setClauses = append(setClauses, "comment = ?")
+		args = append(args, updatedFields.Comment)
 	}
 	if !updatedFields.LastCheckAt.IsZero() {
 		setClauses = append(setClauses, "last_check_at = ?")
@@ -712,31 +710,31 @@ func (s *SQLiteDB) UpdateHash(ctx context.Context, sha256 string, updatedFields 
 	}
 
 	if len(setClauses) == 0 {
-		return fmt.Errorf("no fields to update for hash %s", sha256)
+		return fmt.Errorf("no fields to update for hash %s", hash)
 	}
 
 	query := fmt.Sprintf(`
 		UPDATE hashes
 		SET %s
-		WHERE sha256 = ?;
+		WHERE hash = ?;
 	`, strings.Join(setClauses, ", "))
 
-	args = append(args, sha256)
+	args = append(args, hash)
 
 	result, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
-		s.logger.WithError(err).Errorf("UpdateHash: failed to update hash %s", sha256)
+		s.logger.WithError(err).Errorf("UpdateHash: failed to update hash %s", hash)
 		return err
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		s.logger.WithError(err).Warnf("UpdateHash: failed to get rows affected for hash %s", sha256)
+		s.logger.WithError(err).Warnf("UpdateHash: failed to get rows affected for hash %s", hash)
 		return err
 	}
 
 	if rowsAffected == 0 {
-		return fmt.Errorf("no hash found with SHA256 %s", sha256)
+		return fmt.Errorf("no hash found with Hash %s", hash)
 	}
 
 	return nil

@@ -40,12 +40,16 @@ func NewMonitor(config MonitorConfig, maxConcurrency int64) *Monitor {
 
 // AddHash adds a new hash record to the database.
 func (m *Monitor) AddHash(ctx context.Context, record models.HashRecord) error {
+	// Validate the hash before adding
+	if err := record.ValidateHash(); err != nil {
+		return err
+	}
 	return m.Config.Database.AddHash(ctx, record)
 }
 
 // ImportHashesFromFile imports hashes from a given file path into the database.
 func (m *Monitor) ImportHashesFromFile(ctx context.Context, filePath string) error {
-	hashRecords, err := ReadRecords(filePath) // Implement ReadRecords as per previous instructions
+	hashRecords, err := ReadRecords(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to read records from file: %w", err)
 	}
@@ -53,7 +57,7 @@ func (m *Monitor) ImportHashesFromFile(ctx context.Context, filePath string) err
 	for _, record := range hashRecords {
 		err := m.AddHash(ctx, record)
 		if err != nil {
-			logrus.WithError(err).WithField("sha256", record.SHA256).Error("Failed to add hash")
+			logrus.WithError(err).WithField("hash", record.Hash).Error("Failed to add hash")
 			// Decide whether to continue or halt on error
 			continue
 		}
@@ -131,14 +135,14 @@ func (m *Monitor) checkHash(ctx context.Context, record models.HashStatus) {
 	// Determine if the hash needs to be checked based on LastCheckAt
 	if !record.LastCheckAt.IsZero() && time.Since(record.LastCheckAt) < m.Config.CheckInterval {
 		logrus.WithFields(logrus.Fields{
-			"sha256":       record.SHA256,
+			"hash":         record.Hash,
 			"last_checked": record.LastCheckAt,
 		}).Debug("Skipping hash check; checked recently")
 		return
 	}
 
 	for _, apiClient := range m.Config.APIClients {
-		logrus.WithField("sha256", record.SHA256).Debug("checkHash")
+		logrus.WithField("hash", record.Hash).Debug("checkHash")
 
 		provider := apiClient.ProviderName()
 
@@ -148,13 +152,13 @@ func (m *Monitor) checkHash(ctx context.Context, record models.HashStatus) {
 		}
 
 		logger := logrus.WithFields(logrus.Fields{
-			"sha256":   record.SHA256,
-			"filename": record.FileName,
-			"api":      provider,
-			"context":  ctx.Err(),
+			"hash":    record.Hash,
+			"comment": record.Comment,
+			"api":     provider,
+			"context": ctx.Err(),
 		})
 
-		exists, err := apiClient.CheckHash(ctx, record.SHA256)
+		exists, err := apiClient.CheckHash(ctx, record.Hash)
 		if err != nil {
 			logger.WithField("error", err).Error("Error checking hash in API")
 			continue
@@ -164,12 +168,12 @@ func (m *Monitor) checkHash(ctx context.Context, record models.HashStatus) {
 			logger.Info("Hash found in API")
 
 			// Send notification
-			message := fmt.Sprintf("Hash **%s** was found in **%s**.\nFilename: %s",
-				record.SHA256, provider, record.FileName)
+			message := fmt.Sprintf("Hash **%s** was found in **%s**.\nComment: %s",
+				record.Hash, provider, record.Comment)
 			m.Config.Notifier.Send("Hash Found", message)
 
 			// Persist to DB
-			err = m.Config.Database.MarkAsAlerted(ctx, record.SHA256, provider)
+			err = m.Config.Database.MarkAsAlerted(ctx, record.Hash, provider)
 			if err != nil {
 				logrus.WithError(err).Error("Failed to update database with alerted hash")
 			}
@@ -180,19 +184,19 @@ func (m *Monitor) checkHash(ctx context.Context, record models.HashStatus) {
 		record.LastCheckAt = now
 
 		// Persist the updated HashRecord back to the database
-		err = m.Config.Database.UpdateHash(ctx, record.SHA256, record.ToHashRecord())
+		err = m.Config.Database.UpdateHash(ctx, record.Hash, record.ToHashRecord())
 		if err != nil {
 			logrus.WithError(err).Error("Failed to update database with LastCheckAt")
 		}
 	}
 }
 
-func (m *Monitor) GetHashStatus(ctx context.Context, sha256 string) (models.HashStatus, error) {
-	hash, err := m.Config.Database.GetHash(ctx, sha256)
+func (m *Monitor) GetHashStatus(ctx context.Context, hash string) (models.HashStatus, error) {
+	hashStatus, err := m.Config.Database.GetHash(ctx, hash)
 	if err != nil {
 		return models.HashStatus{}, err
 	}
-	return hash, nil
+	return hashStatus, nil
 }
 
 // GetStats retrieves the current statistics from the database.
